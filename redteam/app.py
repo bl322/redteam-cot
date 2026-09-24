@@ -204,7 +204,7 @@ def run_single(
         "history": [],
     }
     # 首次 yield：立即给出进度条，用户点击后马上有反馈
-    yield (render_progress(0, max_rounds, "准备中", "", 0.0),) + ("",) * 9
+    yield _partial_outputs(render_progress(0, max_rounds, "准备中", "", 0.0))
 
     try:
         for update in app.stream(
@@ -221,9 +221,9 @@ def run_single(
                 last_status = ""
                 if merged.get("history"):
                     last_status = str(merged["history"][-1].get("judge", {}).get("status", ""))
-                yield (render_progress(
+                yield _partial_outputs(render_progress(
                     round_index, max_rounds, node, last_status, time.time() - started
-                ),) + ("",) * 9
+                ))
     except Exception as exc:
         yield _error_outputs(f"{type(exc).__name__}: {exc}")
         return
@@ -242,7 +242,28 @@ def _error_outputs(message: str) -> tuple:
             RED,
         )
     )
-    return (html,) + ("",) * 9
+    return _partial_outputs(html)
+
+
+# 占位的空 DataFrame：gr.Dataframe 的 postprocess 无法处理空字符串（pd.read_csv("") 会抛
+# FileNotFoundError），因此中间态/错误态的 Dataframe 输出必须给空表而非 ""。
+_EMPTY_DF = pd.DataFrame()
+
+
+def _partial_outputs(progress_html: str) -> tuple:
+    """中间态（进度条/错误卡片）：第一个组件更新，其余组件保持占位（Dataframe 用空表）。"""
+    return (
+        progress_html,
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        _EMPTY_DF.copy(),
+        "",
+        "",
+    )
 
 
 def _batch_meta_json(
@@ -640,6 +661,7 @@ def main() -> None:
         css=CUSTOM_CSS,
         server_name="127.0.0.1",
         server_port=7860,
+        show_error=True,
         inbrowser=False,
     )
 
