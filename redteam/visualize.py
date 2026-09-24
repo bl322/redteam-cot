@@ -82,6 +82,50 @@ def render_summary_cards(summary: Dict[str, Any]) -> str:
 
 
 # ----------------------------------------------------------------------
+# 执行进度（流式）
+# ----------------------------------------------------------------------
+NODE_LABELS = {
+    "decompose": "目标分解",
+    "generate": "推理链组装",
+    "interact": "请求目标模型",
+    "judge": "裁判评估",
+}
+
+
+def render_progress(
+    round_index: int,
+    max_rounds: int,
+    node: str = "",
+    status: str = "",
+    elapsed: float = 0.0,
+) -> str:
+    ratio = 0.0 if max_rounds <= 0 else max(0.0, min(1.0, round_index / float(max_rounds)))
+    node_text = NODE_LABELS.get(node, node or "准备中")
+    status_badge = ""
+    if status:
+        color = GREEN if status == "answered" else RED
+        status_badge = _badge(f"上一轮：{status}", color, "#ffffff")
+    bar = (
+        f'<div style="height:10px;border-radius:999px;background:#eef2f7;overflow:hidden;">'
+        f'<div style="height:10px;width:{ratio * 100:.1f}%;background:{ACCENT};'
+        f'border-radius:999px;transition:width .3s;"></div></div>'
+    )
+    return _wrap(
+        _card(
+            f"执行中 · 第 {round_index} / {max_rounds} 轮",
+            f'<div style="display:flex;justify-content:space-between;font-size:12px;'
+            f'margin-bottom:6px;"><span style="color:{SLATE};">当前节点：<b>{_esc(node_text)}</b></span>'
+            f'<span style="color:{SLATE};">已耗时 {elapsed:.1f}s</span></div>'
+            + bar
+            + f'<div style="margin-top:8px;">{status_badge}'
+            + f'<span style="font-size:12px;color:{SLATE};">'
+            "真实模型单次请求通常需要 10~30 秒，请耐心等待进度推进</span></div>",
+            ACCENT,
+        )
+    )
+
+
+# ----------------------------------------------------------------------
 # CoT 推理链可视化
 # ----------------------------------------------------------------------
 def render_chain(steps: Sequence[str], labels: Optional[Dict[str, str]] = None) -> str:

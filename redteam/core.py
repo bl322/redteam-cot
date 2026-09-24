@@ -30,6 +30,7 @@ class AgentConfig:
     mock_refusal_rate: float = 0.3  # Mock 模式下目标模型拒答概率（仅用于演示）
     temperature: float = 0.2
     max_tokens: int = 512
+    request_timeout: float = 60.0  # 单次目标模型请求超时（秒），避免界面长时间无响应
     seed: int = 42
 
     def __post_init__(self) -> None:
@@ -112,6 +113,7 @@ class TargetEnvironmentAgent:
                 base_url=config.base_url,
                 temperature=config.temperature,
                 max_tokens=config.max_tokens,
+                timeout=config.request_timeout,
             )
 
     def call(self, prompt: str) -> str:

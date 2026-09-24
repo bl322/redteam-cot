@@ -385,6 +385,8 @@ class OpenAICompatibleLLM(LLMClient):
         system_prompt: str = "You are a helpful assistant.",
         temperature: float = 0.2,
         max_tokens: int = 512,
+        timeout: float = 60.0,
+        max_retries: int = 1,
     ) -> None:
         try:
             from openai import OpenAI
@@ -396,13 +398,14 @@ class OpenAICompatibleLLM(LLMClient):
             raise ValueError("Missing API key. Set LLM_API_KEY or pass api_key explicitly.")
         resolved_base_url = base_url or os.getenv("LLM_BASE_URL")
         self.model = model or os.getenv("LLM_MODEL") or "gpt-5.4-mini"
-        client_kwargs = {"api_key": resolved_api_key}
+        client_kwargs = {"api_key": resolved_api_key, "max_retries": max_retries}
         if resolved_base_url:
             client_kwargs["base_url"] = resolved_base_url
         self.client = OpenAI(**client_kwargs)
         self.system_prompt = system_prompt
         self.temperature = temperature
         self.max_tokens = max_tokens
+        self.timeout = timeout
 
     def call_llm(self, text: str) -> str:
         response = self.client.chat.completions.create(
@@ -413,5 +416,6 @@ class OpenAICompatibleLLM(LLMClient):
             ],
             temperature=self.temperature,
             max_tokens=self.max_tokens,
+            timeout=self.timeout,
         )
         return response.choices[0].message.content or ""

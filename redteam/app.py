@@ -5,7 +5,7 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import gradio as gr
 import pandas as pd
@@ -15,8 +15,13 @@ from .core import AgentConfig
 from .dataset import DatasetLoader
 from .graph import build_graph
 from .visualize import (
+    RED,
+    _card,
+    _esc,
+    _wrap,
     render_chain,
     render_pipeline,
+    render_progress,
     render_resources,
     render_score_bars,
     render_summary_cards,
@@ -126,38 +131,8 @@ def _is_retryable_error(exc: Exception) -> bool:
     return "429" in message or "rate limit" in message or "too many requests" in message
 
 
-def run_single(
-    seed_text: str,
-    attack_label: str,
-    model_name: str,
-    base_url: str,
-    api_key: str,
-    population_size: int,
-    max_rounds: int,
-    use_mock: bool,
-) -> tuple[str, str, str, str, str, str, str, pd.DataFrame, str, str]:
-    config = AgentConfig(
-        model_name=model_name,
-        base_url=_normalize_base_url(base_url),
-        api_key=api_key or None,
-        use_mock=use_mock,
-        attack=_parse_attack(attack_label),
-        population_size=population_size,
-        max_rounds=max_rounds,
-    )
-    app = build_graph(config)
-    result = _invoke_with_thread(
-        app,
-        {
-            "seed_text": seed_text,
-            "current_text": seed_text,
-            "round_index": 0,
-            "max_rounds": max_rounds,
-            "trace": [],
-            "history": [],
-        },
-        "single-sample",
-    )
+def _render_result(result: Dict[str, Any], config: AgentConfig, max_rounds: int) -> tuple:
+    """把一次完整执行结果渲染为全部可视化组件。"""
     summary = _summarize(result)
     history = result.get("history", [])
     df = pd.DataFrame(history)
@@ -189,6 +164,127 @@ def run_single(
     )
 
 
+def run_single(
+    seed_text: str,
+    attack_label: str,
+    model_name: str,
+    base_url: str,
+    api_key: str,
+    population_size: int,
+    max_rounds: int,
+    max_tokens: int,
+    use_mock: bool,
+):
+    """流式执行单样本评测：每完成一个节点即产出一次进度，避免界面长时间无反馈。"""
+    import time
+
+    started = time.time()
+    try:
+        config = AgentConfig(
+            model_name=model_name,
+            base_url=_normalize_base_url(base_url),
+            api_key=api_key or None,
+            use_mock=use_mock,
+            attack=_parse_attack(attack_label),
+            population_size=population_size,
+            max_rounds=max_rounds,
+            max_tokens=int(max_tokens),
+        )
+    except Exception as exc:  # 配置错误（如不支持的策略名）
+        yield _error_outputs(f"{type(exc).__name__}: {exc}")
+        return
+
+    app = build_graph(config)
+    merged: Dict[str, Any] = {
+        "seed_text": seed_text,
+        "current_text": seed_text,
+        "round_index": 0,
+        "max_rounds": max_rounds,
+        "trace": [],
+        "history": [],
+    }
+    # 首次 yield：立即给出进度条，用户点击后马上有反馈
+    yield (render_progress(0, max_rounds, "准备中", "", 0.0),) + ("",) * 9
+
+    try:
+        for update in app.stream(
+            merged,
+            config={"configurable": {"thread_id": f"single-{int(started * 1000)}"}},
+            stream_mode="updates",
+        ):
+            if not isinstance(update, dict):
+                continue
+            for node, payload in update.items():
+                if isinstance(payload, dict):
+                    merged.update(payload)
+                round_index = int(merged.get("round_index", 0))
+                last_status = ""
+                if merged.get("history"):
+                    last_status = str(merged["history"][-1].get("judge", {}).get("status", ""))
+                yield (render_progress(
+                    round_index, max_rounds, node, last_status, time.time() - started
+                ),) + ("",) * 9
+    except Exception as exc:
+        yield _error_outputs(f"{type(exc).__name__}: {exc}")
+        return
+
+    yield _render_result(merged, config, max_rounds)
+
+
+def _error_outputs(message: str) -> tuple:
+    """执行异常时返回统一的错误提示组合。"""
+    html = _wrap(
+        _card(
+            "执行失败",
+            f'<div style="font-size:13px;line-height:1.7;color:#0f172a;">{_esc(message)}</div>'
+            '<div style="font-size:12px;color:#475569;margin-top:8px;">'
+            "常见原因：Base URL 缺少 /compatible-mode/v1 路径、模型名不存在、API Key 无效或网络超时。",
+            RED,
+        )
+    )
+    return (html,) + ("",) * 9
+
+
+def _batch_meta_json(
+    total: int,
+    refusals: int,
+    avg_rounds: Sequence[float],
+    by_column: Dict[str, Dict[str, float]],
+    by_primary_domain: Dict[str, Dict[str, float]],
+    output_path: Path,
+    summary_path: Path,
+    checkpoint_path: Path,
+) -> str:
+    summary = {
+        "num_samples": total,
+        "num_refusals": refusals,
+        "refusal_trigger_rate": round(refusals / total if total else 0.0, 4),
+        "avg_rounds": round(sum(avg_rounds) / total, 4) if total else 0.0,
+        "output_path": str(output_path),
+        "summary_path": str(summary_path),
+        "checkpoint_path": str(checkpoint_path),
+        "by_source_column": {
+            key: {
+                "num_samples": int(stats["num_samples"]),
+                "num_refusals": int(stats["num_refusals"]),
+                "refusal_trigger_rate": round(stats["num_refusals"] / stats["num_samples"], 4) if stats["num_samples"] else 0.0,
+                "avg_rounds": round(stats["style_score_sum"] / stats["num_samples"], 4) if stats["num_samples"] else 0.0,
+            }
+            for key, stats in by_column.items()
+        },
+        "by_primary_domain": {
+            key: {
+                "num_samples": int(stats["num_samples"]),
+                "num_refusals": int(stats["num_refusals"]),
+                "refusal_trigger_rate": round(stats["num_refusals"] / stats["num_samples"], 4) if stats["num_samples"] else 0.0,
+                "avg_rounds": round(stats["style_score_sum"] / stats["num_samples"], 4) if stats["num_samples"] else 0.0,
+            }
+            for key, stats in by_primary_domain.items()
+        },
+    }
+    return json.dumps(summary, ensure_ascii=False, indent=2)
+
+
 def run_batch(
     csv_file: str,
     limit: int,
@@ -198,19 +294,22 @@ def run_batch(
     api_key: str,
     population_size: int,
     max_rounds: int,
+    max_tokens: int,
     use_mock: bool,
     resume: bool = True,
-) -> tuple[pd.DataFrame, str]:
+):
+    """批量评测：每处理完一条样本即 yield 一次，避免长时间黑屏无反馈。"""
     dataset_path = Path(csv_file)
     rows = DatasetLoader(dataset_path).load_records(limit=limit)
     config = AgentConfig(
         model_name=model_name,
-        base_url=base_url or None,
+        base_url=_normalize_base_url(base_url),
         api_key=api_key or None,
         use_mock=use_mock,
         attack=_parse_attack(attack_label),
         population_size=population_size,
         max_rounds=max_rounds,
+        max_tokens=int(max_tokens),
     )
     app = build_graph(config)
     output_path, summary_path, checkpoint_path = _default_batch_paths(dataset_path, model_name, config.attack, population_size, max_rounds)
@@ -239,11 +338,22 @@ def run_batch(
         by_primary_domain[primary_domain]["style_score_sum"] += rounds
 
     write_mode = "a" if resume else "w"
+    pending = [row for row in rows if str(row["id"]) not in processed_ids]
+    yield pd.DataFrame(records), _batch_meta_json(
+        total, refusals, avg_rounds, by_column, by_primary_domain,
+        output_path, summary_path, checkpoint_path,
+    )
+
     with output_path.open(write_mode, encoding="utf-8") as sink:
-        for row in rows:
+        for index, row in enumerate(pending, start=1):
             row_id = str(row["id"])
-            if row_id in processed_ids:
-                continue
+            yield pd.DataFrame(records + [{
+                "id": row_id,
+                "status": f"processing {index}/{len(pending)}",
+            }]), _batch_meta_json(
+                total, refusals, avg_rounds, by_column, by_primary_domain,
+                output_path, summary_path, checkpoint_path,
+            )
 
             result: Optional[Dict[str, Any]] = None
             error_text: Optional[str] = None
@@ -341,35 +451,19 @@ def run_batch(
             checkpoint_path.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
             summary_path.write_text(json.dumps(checkpoint["summary"], ensure_ascii=False, indent=2), encoding="utf-8")
 
-    summary = {
-        "num_samples": total,
-        "num_refusals": refusals,
-        "refusal_trigger_rate": round(refusals / total if total else 0.0, 4),
-        "avg_rounds": round(sum(avg_rounds) / total if total else 0.0, 4) if total else 0.0,
-        "output_path": str(output_path),
-        "summary_path": str(summary_path),
-        "checkpoint_path": str(checkpoint_path),
-        "by_source_column": {
-            key: {
-                "num_samples": int(stats["num_samples"]),
-                "num_refusals": int(stats["num_refusals"]),
-                "refusal_trigger_rate": round(stats["num_refusals"] / stats["num_samples"], 4) if stats["num_samples"] else 0.0,
-                "avg_rounds": round(stats["style_score_sum"] / stats["num_samples"], 4) if stats["num_samples"] else 0.0,
-            }
-            for key, stats in by_column.items()
-        },
-        "by_primary_domain": {
-            key: {
-                "num_samples": int(stats["num_samples"]),
-                "num_refusals": int(stats["num_refusals"]),
-                "refusal_trigger_rate": round(stats["num_refusals"] / stats["num_samples"], 4) if stats["num_samples"] else 0.0,
-                "avg_rounds": round(stats["style_score_sum"] / stats["num_samples"], 4) if stats["num_samples"] else 0.0,
-            }
-            for key, stats in by_primary_domain.items()
-        },
-    }
-    summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
-    return pd.DataFrame(records), json.dumps(summary, ensure_ascii=False, indent=2)
+            yield pd.DataFrame(records), _batch_meta_json(
+                total, refusals, avg_rounds, by_column, by_primary_domain,
+                output_path, summary_path, checkpoint_path,
+            )
+
+    summary_json = _batch_meta_json(
+        total, refusals, avg_rounds, by_column, by_primary_domain,
+        output_path, summary_path, checkpoint_path,
+    )
+    summary_path.write_text(
+        json.dumps(json.loads(summary_json), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    yield pd.DataFrame(records), summary_json
 
 
 CUSTOM_CSS = """
@@ -431,8 +525,15 @@ def build_demo() -> gr.Blocks:
                         use_mock = gr.Checkbox(label="Mock Mode (离线演示)", value=True)
                     with gr.Row():
                         population_size = gr.Slider(2, 16, value=8, step=1, label="Population Size")
-                        max_rounds = gr.Slider(1, 10, value=4, step=1, label="Max Rounds")
-                    run_btn = gr.Button("▶ Run CoT Attack", variant="primary")
+                        max_rounds = gr.Slider(1, 10, value=2, step=1, label="Max Rounds")
+                    with gr.Row():
+                        max_tokens = gr.Slider(
+                            256, 4096, value=1024, step=128,
+                            label="Max Tokens（真实模型输出较长，过小会截断）",
+                        )
+                    with gr.Row():
+                        run_btn = gr.Button("▶ Run CoT Attack", variant="primary")
+                        cancel_btn = gr.Button("■ 取消", variant="stop")
 
             gr.Markdown("### 📈 评测结果")
             summary_cards = gr.HTML(label="Summary")
@@ -450,9 +551,9 @@ def build_demo() -> gr.Blocks:
                 history_df = gr.Dataframe(label="History")
                 raw = gr.Code(label="Raw Result", language="json")
 
-            run_btn.click(
+            run_event = run_btn.click(
                 run_single,
-                inputs=[seed, attack_single, model_name, base_url, api_key, population_size, max_rounds, use_mock],
+                inputs=[seed, attack_single, model_name, base_url, api_key, population_size, max_rounds, max_tokens, use_mock],
                 outputs=[
                     summary_cards,
                     report_html,
@@ -466,6 +567,7 @@ def build_demo() -> gr.Blocks:
                     resources_html,
                 ],
             )
+            cancel_btn.click(None, cancels=[run_event])
 
         with gr.Tab("📊 批量评测"):
             dataset = gr.Textbox(label="Dataset Path (CSV/JSONL)", value=str(DEFAULT_DATASET))
@@ -473,14 +575,21 @@ def build_demo() -> gr.Blocks:
                 limit = gr.Slider(1, 200, value=10, step=1, label="Limit")
                 attack_batch = gr.Dropdown(choices=ATTACK_CHOICES, value=ATTACK_CHOICES[0], label="Attack Strategy")
                 resume = gr.Checkbox(label="Resume Existing Output", value=True)
-            batch_run = gr.Button("▶ Run Batch", variant="primary")
+            with gr.Row():
+                batch_run = gr.Button("▶ Run Batch", variant="primary")
+                batch_cancel_btn = gr.Button("■ 取消", variant="stop")
+            gr.Markdown(
+                "<span style='font-size:12px;color:#475569;'>批量任务逐条实时落盘并刷新表格；"
+                "真实模型下建议先设 Limit=3 试跑，确认单条耗时后再放大。</span>"
+            )
             batch_df = gr.Dataframe(label="Batch Results")
             batch_meta = gr.Code(label="Batch Meta", language="json")
-            batch_run.click(
+            batch_event = batch_run.click(
                 run_batch,
-                inputs=[dataset, limit, attack_batch, model_name, base_url, api_key, population_size, max_rounds, use_mock, resume],
+                inputs=[dataset, limit, attack_batch, model_name, base_url, api_key, population_size, max_rounds, max_tokens, use_mock, resume],
                 outputs=[batch_df, batch_meta],
             )
+            batch_cancel_btn.click(None, cancels=[batch_event])
 
         with gr.Tab("🏗 架构与说明"):
             arch_attack = gr.Dropdown(choices=ATTACK_CHOICES, value=ATTACK_CHOICES[0], label="选择攻击策略查看链路编排")
@@ -527,7 +636,7 @@ def build_demo() -> gr.Blocks:
 
 def main() -> None:
     demo = build_demo()
-    demo.launch(
+    demo.queue(default_concurrency_limit=2).launch(
         css=CUSTOM_CSS,
         server_name="127.0.0.1",
         server_port=7860,
