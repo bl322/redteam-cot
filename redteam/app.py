@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 import gradio as gr
 import pandas as pd
 
+from .analyze import build_report, render_report
 from .core import AgentConfig
 from .dataset import DatasetLoader
 from .graph import build_graph
@@ -33,6 +34,16 @@ ATTACK_CHOICES = ["cot (新型CoT攻击)", "cc_bos (CC-BOS基线)"]
 
 def _parse_attack(label: str) -> str:
     return "cc_bos" if str(label).startswith("cc_bos") else "cot"
+
+
+def _normalize_base_url(url: str) -> Optional[str]:
+    """容错处理 Base URL：缺协议自动补 https://，百炼类网关自动补兼容路径。"""
+    value = (url or "").strip()
+    if not value:
+        return None
+    if "://" not in value:
+        value = "https://" + value.lstrip("/")
+    return value.rstrip("/")
 
 
 def render_pipeline_card(attack_label: str) -> str:
@@ -124,10 +135,10 @@ def run_single(
     population_size: int,
     max_rounds: int,
     use_mock: bool,
-) -> tuple[str, str, str, str, str, str, pd.DataFrame, str, str]:
+) -> tuple[str, str, str, str, str, str, str, pd.DataFrame, str, str]:
     config = AgentConfig(
         model_name=model_name,
-        base_url=base_url or None,
+        base_url=_normalize_base_url(base_url),
         api_key=api_key or None,
         use_mock=use_mock,
         attack=_parse_attack(attack_label),
@@ -157,6 +168,7 @@ def run_single(
     scores = candidate.get("scores") or {}
 
     cards_html = render_summary_cards(summary)
+    report_html = render_report(build_report(result, attack=config.attack, max_rounds=max_rounds))
     chain_html = render_chain(steps, labels)
     score_html = render_score_bars(scores)
     trend_html = render_trend(_scores_by_round(result))
@@ -165,6 +177,7 @@ def run_single(
     raw_json = json.dumps(result, ensure_ascii=False, indent=2)
     return (
         cards_html,
+        report_html,
         render_pipeline(config.attack),
         chain_html,
         score_html,
@@ -407,7 +420,12 @@ def build_demo() -> gr.Blocks:
                             choices=ATTACK_CHOICES, value=ATTACK_CHOICES[0], label="Attack Strategy"
                         )
                         model_name = gr.Textbox(label="Model", value="qwen3-max")
-                        base_url = gr.Textbox(label="Base URL", value="")
+                        base_url = gr.Textbox(
+                            label="Base URL",
+                            value="",
+                            placeholder="https://<实例>.maas.aliyuncs.com/compatible-mode/v1",
+                            info="缺省协议会自动补 https://；阿里云百炼兼容网关需以 /compatible-mode/v1 结尾",
+                        )
                     with gr.Row():
                         api_key = gr.Textbox(label="API Key", type="password", value="")
                         use_mock = gr.Checkbox(label="Mock Mode (离线演示)", value=True)
@@ -418,6 +436,7 @@ def build_demo() -> gr.Blocks:
 
             gr.Markdown("### 📈 评测结果")
             summary_cards = gr.HTML(label="Summary")
+            report_html = gr.HTML(label="Report")
             pipeline_html = gr.HTML(label="Pipeline")
             with gr.Row():
                 with gr.Column(scale=1):
@@ -436,6 +455,7 @@ def build_demo() -> gr.Blocks:
                 inputs=[seed, attack_single, model_name, base_url, api_key, population_size, max_rounds, use_mock],
                 outputs=[
                     summary_cards,
+                    report_html,
                     pipeline_html,
                     chain_html,
                     score_html,
