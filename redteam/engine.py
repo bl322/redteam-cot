@@ -398,24 +398,100 @@ class OpenAICompatibleLLM(LLMClient):
             raise ValueError("Missing API key. Set LLM_API_KEY or pass api_key explicitly.")
         resolved_base_url = base_url or os.getenv("LLM_BASE_URL")
         self.model = model or os.getenv("LLM_MODEL") or "gpt-5.4-mini"
-        client_kwargs = {"api_key": resolved_api_key, "max_retries": max_retries}
-        if resolved_base_url:
-            client_kwargs["base_url"] = resolved_base_url
-        self.client = OpenAI(**client_kwargs)
+        self._api_key = resolved_api_key
+        self._max_retries = max_retries
+        self._openai_cls = OpenAI
+        # 各类 OpenAI 兼容网关的路径不统一（阿里云百炼专属网关是 /compatible-mode/v1，
+        # 直连 /v1 会 404）。这里按「用户填的优先，其余候选兜底」顺序逐个尝试。
+        self._candidate_urls = self._build_candidate_urls(resolved_base_url)
+        self.client = self._make_client(self._candidate_urls[0] if self._candidate_urls else None)
+        self.active_base_url = self._candidate_urls[0] if self._candidate_urls else None
         self.system_prompt = system_prompt
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
 
+    # ------------------------------------------------------------------
+    # 端点自适应
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _build_candidate_urls(base_url: Optional[str]) -> List[str]:
+        if not base_url:
+            return []
+        value = base_url.strip().rstrip("/")
+        if "://" not in value:
+            value = "https://" + value.lstrip("/")
+        match = re.match(r"^(https?://[^/]+)(.*)$", value)
+        if not match:
+            return [value]
+        origin, path = match.group(1), match.group(2)
+        candidates: List[str] = []
+        if path:
+            candidates.append(origin + path)
+        for suffix in ("/compatible-mode/v1", "/v1", "/api/v1", "/openai/v1"):
+            candidate = origin + suffix
+            if candidate not in candidates:
+                candidates.append(candidate)
+        if origin not in candidates:
+            candidates.append(origin)
+        return candidates
+
+    def _make_client(self, base_url: Optional[str]):
+        kwargs = {"api_key": self._api_key, "max_retries": self._max_retries}
+        if base_url:
+            kwargs["base_url"] = base_url
+        return self._openai_cls(**kwargs)
+
+    @staticmethod
+    def _is_not_found(exc: Exception) -> bool:
+        text = f"{type(exc).__name__}: {exc}"
+        return "404" in text or "NotFound" in text or "not_found" in text
+
+    def _list_available_models(self, limit: int = 15) -> List[str]:
+        for url in self._candidate_urls:
+            try:
+                names = [m.id for m in self._make_client(url).models.list().data]
+                if names:
+                    return names[:limit]
+            except Exception:
+                continue
+        return []
+
+    def _diagnose(self, exc: Exception) -> str:
+        lines = [f"{type(exc).__name__}: {exc}"]
+        if self._candidate_urls:
+            lines.append("已尝试的 Base URL：")
+            lines.extend(f"  - {url}" for url in self._candidate_urls)
+        models = self._list_available_models()
+        if models:
+            lines.append("该端点可用模型（前 15 个）：" + "、".join(models))
+            lines.append(f"当前模型名：{self.model}（如不在上表中请改用其中的名称）")
+        else:
+            lines.append("未能获取可用模型列表：请确认 Base URL 域名正确、网络可达、API Key 有效。")
+        return "\n".join(lines)
+
     def call_llm(self, text: str) -> str:
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": text},
-            ],
-            temperature=self.temperature,
-            max_tokens=self.max_tokens,
-            timeout=self.timeout,
-        )
-        return response.choices[0].message.content or ""
+        last_exc: Optional[Exception] = None
+        for url in self._candidate_urls or [None]:
+            try:
+                client = self.client if url == self.active_base_url else self._make_client(url)
+                response = client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": self.system_prompt},
+                        {"role": "user", "content": text},
+                    ],
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                    timeout=self.timeout,
+                )
+                # 命中可用路径后固定下来，后续轮次不再重复探测
+                self.active_base_url = url
+                self.client = client
+                return response.choices[0].message.content or ""
+            except Exception as exc:
+                last_exc = exc
+                if self._is_not_found(exc):
+                    continue
+                raise
+        raise RuntimeError(self._diagnose(last_exc)) from last_exc

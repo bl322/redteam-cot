@@ -279,9 +279,10 @@ def _error_outputs(message: str) -> tuple:
     html = _wrap(
         _card(
             "执行失败",
-            f'<div style="font-size:13px;line-height:1.7;color:#0f172a;">{_esc(message)}</div>'
+            f'<div style="font-size:13px;line-height:1.7;color:#0f172a;white-space:pre-wrap;">{_esc(message)}</div>'
             '<div style="font-size:12px;color:#475569;margin-top:8px;">'
-            "常见原因：Base URL 缺少 /compatible-mode/v1 路径、模型名不存在、API Key 无效或网络超时。",
+            "Base URL 只填域名即可，系统会自动探测 /compatible-mode/v1 等兼容路径。"
+            "若仍失败，请核对模型名是否存在（报错信息会列出该端点可用模型）与 API Key 是否有效。",
             RED,
         )
     )
@@ -591,8 +592,8 @@ def build_demo() -> gr.Blocks:
                         base_url = gr.Textbox(
                             label="Base URL",
                             value="",
-                            placeholder="https://<实例>.maas.aliyuncs.com/compatible-mode/v1",
-                            info="缺省协议会自动补 https://；阿里云百炼兼容网关需以 /compatible-mode/v1 结尾",
+                            placeholder="ws-m0wca....maas.aliyuncs.com（只填域名即可）",
+                            info="只填域名即可：缺协议自动补 https://，兼容路径（如百炼的 /compatible-mode/v1）会自动探测",
                         )
                     with gr.Row():
                         api_key = gr.Textbox(label="API Key", type="password", value="")
