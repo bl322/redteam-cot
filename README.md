@@ -85,8 +85,15 @@ flowchart TD
 
 ## 项目结构
 
-- `redteam/`：核心代码（`cot.py` 为新型 CoT 攻击模块，`engine.py` 保留 CC-BOS 基线）
+- `redteam/`：核心代码
+  - `cot.py`：新型 CoT 攻击模块（目标分解 / 推理链组装 / FOA 演化 / CoT 评分）
+  - `visualize.py`：前端可视化渲染（推理链、评分条、演化趋势、时间线、资源监控）
+  - `graph.py`：LangGraph 状态图编排
+  - `core.py`：生成 / 交互 / 裁判三类 Agent
+  - `engine.py`：目标模型客户端、拒答检测、CC-BOS 基线、CoT Mock
+  - `app.py`：Gradio 前端页面
 - `data/`：评测数据集
+- `scripts/smoke_test.py`：Mock 模式离线冒烟测试
 - `results/redteam_batch/`：批量评测输出
 - `requirements.txt`：依赖列表
 
@@ -117,25 +124,35 @@ python -m redteam
 
 启动后浏览器会打开本地 Gradio 页面。修改代码后仅刷新浏览器无效，须重启后端。
 
-## 使用流程
+## 前端可视化页面
 
-### 单样本评测
-1. 打开 `Single Sample`
-2. 填写 `Seed Prompt`
-3. 选择 `Attack Strategy`（默认 `cot (新型CoT攻击)`）
-4. 设置 `Model`、`Base URL`、`API Key`
-5. 勾选 `Mock Mode` 可离线验证
-6. 设置 `Population Size`、`Max Rounds`
+启动服务后在浏览器打开 http://127.0.0.1:7860 ，页面包含三个标签页：
 
-### 批量评测
-1. 打开 `Batch Dataset`
-2. 填写数据集路径
-3. 选择 `Attack Strategy`
-4. 设置 `Limit`
-5. 勾选 `Resume Existing Output`
-6. 点击 `Run Batch`
+### ⚡ 单样本评测（可视化主面板）
+
+点击 `Run CoT Attack` 后，一次运行即可得到一组可视化结果：
+
+| 可视化面板 | 说明 |
+| --- | --- |
+| **关键指标卡片** | 迭代轮数、拒答轮数、链路跟随率、最终状态（answered / refusal） |
+| **LangGraph 链路编排** | 当前攻击策略下的节点编排与闭环规则，随策略切换实时变化 |
+| **CoT 推理链分解** | 分步卡片展示推理子问题链，标注当前 FOA 选中的八维策略组合，最后一步（收束步）高亮为红色 |
+| **多维适应度评分** | 各评分维度的横向条形图（语义保留 / 推理链风格 / 分解深度 / 隐蔽度 / 综合） |
+| **多轮演化趋势** | SVG 折线图展示每轮适应度变化，用于观察 FOA 是否收敛 |
+| **逐轮攻击轨迹** | 每轮一张卡片：攻击 Prompt、目标回复、链路跟随 / 收束结论徽章、命中的推理链标记 |
+| **运行环境资源占用** | CPU / 内存 / 磁盘实时占用（依赖 `psutil`） |
+
+无 API Key 时勾选 **Mock Mode**，系统会用内置的 `CoTMockLLM` 模拟目标模型沿推理链作答或拒答（拒答概率由 `mock_refusal_rate` 控制），完整走通上述全部可视化环节。
+
+### 📊 批量评测
+
+填写数据集路径与 Limit 后批量跑库，输出样本级明细与整体统计。
 
 批量输出文件名中包含攻击策略标识（如 `_cot_p8_r4_`），CoT 与 CC-BOS 基线的结果互不覆盖，便于对比。
+
+### 🏗 架构与说明
+
+可切换攻击策略查看对应链路编排，并包含模块构成表、CoT 八维策略空间说明、评测维度说明与资源占用刷新按钮。
 
 ## 评测维度详解
 

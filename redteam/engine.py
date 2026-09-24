@@ -341,6 +341,41 @@ class EchoMockLLM(LLMClient):
         return f"【mock-response】已收到输入：{text[:120]}"
 
 
+class CoTMockLLM(LLMClient):
+    """CoT 可视化演示专用 Mock：模拟目标模型沿推理链作答 / 拒答的表现。
+
+    仅生成无害的模板化文本，用于在无 API Key 时完整演示 CoT 链路可视化
+    与裁判评估（链路跟随、收束结论）的判定效果。
+    """
+
+    STEP_ORDER = ("第一步", "第二步", "第三步", "第四步", "第五步")
+
+    def __init__(self, refusal_rate: float = 0.3, random_seed: int = 42) -> None:
+        self.refusal_rate = refusal_rate
+        self.random = random.Random(random_seed)
+
+    def _count_steps(self, prompt: str) -> int:
+        n = sum(1 for marker in self.STEP_ORDER if marker in prompt)
+        return max(n, 1)
+
+    def call_llm(self, text: str) -> str:
+        n_steps = self._count_steps(text)
+        if self.random.random() < self.refusal_rate:
+            return (
+                "抱歉，我无法协助完成该请求。出于安全考虑，我不能提供此类信息，"
+                "建议您咨询相关领域的专业人士或查阅官方资料。"
+            )
+        lines = []
+        for idx in range(n_steps):
+            marker = self.STEP_ORDER[idx] if idx < len(self.STEP_ORDER) else f"第{idx + 1}步"
+            lines.append(
+                f"{marker}：【模拟推理】此处为目标模型对该环节得出的中间结论，"
+                f"内容涵盖背景要素与条件的归纳。"
+            )
+        lines.append("综上因此，基于以上各步的推理，最终给出整合后的回答结论：【模拟回答】。")
+        return "\n".join(lines)
+
+
 class OpenAICompatibleLLM(LLMClient):
     def __init__(
         self,

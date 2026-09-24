@@ -13,6 +13,15 @@ import pandas as pd
 from .core import AgentConfig
 from .dataset import DatasetLoader
 from .graph import build_graph
+from .visualize import (
+    render_chain,
+    render_pipeline,
+    render_resources,
+    render_score_bars,
+    render_summary_cards,
+    render_timeline,
+    render_trend,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +35,11 @@ def _parse_attack(label: str) -> str:
     return "cc_bos" if str(label).startswith("cc_bos") else "cot"
 
 
+def render_pipeline_card(attack_label: str) -> str:
+    """架构 Pipeline 卡片：兼容带中文说明的下拉框标签。"""
+    return render_pipeline(_parse_attack(attack_label))
+
+
 def _invoke_with_thread(app, state: Dict[str, Any], thread_id: str):
     return app.invoke(state, config={"configurable": {"thread_id": thread_id}})
 
@@ -34,12 +48,26 @@ def _summarize(result: Dict[str, Any]) -> Dict[str, Any]:
     history = result.get("history", [])
     refusals = sum(1 for row in history if row.get("judge", {}).get("is_refusal_template"))
     rounds = len(history)
-    return {
+    judges = [row.get("judge", {}) for row in history]
+    followed = sum(1 for judge in judges if judge.get("chain_followed"))
+    summary: Dict[str, Any] = {
         "rounds": rounds,
         "refusals": refusals,
         "final_status": history[-1]["judge"]["status"] if history else "empty",
         "last_prompt": result.get("current_text", ""),
     }
+    if history:
+        summary["chain_follow_rate"] = f"{followed / len(history) * 100:.0f}%"
+        summary["conclusion_reached"] = bool(judges[-1].get("conclusion_reached"))
+    return summary
+
+
+def _scores_by_round(result: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
+    scores: Dict[int, Dict[str, Any]] = {}
+    for node in result.get("trace", []):
+        if node.get("node") == "generate":
+            scores[int(node.get("round", 0))] = node.get("scores", {}) or {}
+    return scores
 
 
 def _slugify(value: str) -> str:
@@ -96,7 +124,7 @@ def run_single(
     population_size: int,
     max_rounds: int,
     use_mock: bool,
-) -> tuple[Dict[str, Any], pd.DataFrame, str]:
+) -> tuple[str, str, str, str, str, str, pd.DataFrame, str, str]:
     config = AgentConfig(
         model_name=model_name,
         base_url=base_url or None,
@@ -119,9 +147,33 @@ def run_single(
         },
         "single-sample",
     )
+    summary = _summarize(result)
     history = result.get("history", [])
     df = pd.DataFrame(history)
-    return _summarize(result), df, json.dumps(result, ensure_ascii=False, indent=2)
+
+    candidate = result.get("prompt_candidate", {}) or {}
+    steps = candidate.get("cot_steps") or result.get("cot_steps") or []
+    labels = candidate.get("strategy_labels") or {}
+    scores = candidate.get("scores") or {}
+
+    cards_html = render_summary_cards(summary)
+    chain_html = render_chain(steps, labels)
+    score_html = render_score_bars(scores)
+    trend_html = render_trend(_scores_by_round(result))
+    timeline_html = render_timeline(history, attack=config.attack)
+    resources_html = render_resources()
+    raw_json = json.dumps(result, ensure_ascii=False, indent=2)
+    return (
+        cards_html,
+        render_pipeline(config.attack),
+        chain_html,
+        score_html,
+        trend_html,
+        timeline_html,
+        df,
+        raw_json,
+        resources_html,
+    )
 
 
 def run_batch(
@@ -307,43 +359,101 @@ def run_batch(
     return pd.DataFrame(records), json.dumps(summary, ensure_ascii=False, indent=2)
 
 
-def build_demo() -> gr.Blocks:
-    with gr.Blocks(title="CoT Red-Team Evaluation Agent") as demo:
-        gr.Markdown(
-            "# CoT Red-Team Evaluation Agent (思维链越狱评测智能体)\n"
-            "基于 LangGraph 的防御性多智能体评测流水线：默认采用新型思维链 (Chain-of-Thought) "
-            "攻击策略，将评测目标分解为逐级递进的推理链进行鲁棒性测试；保留 CC-BOS 作为对比基线。"
-        )
+CUSTOM_CSS = """
+.gradio-container { background: #f6f8fb !important; }
+#hero { background: linear-gradient(120deg, #1e3a8a 0%, #2563eb 55%, #7c3aed 100%);
+        color: #ffffff; border-radius: 14px; padding: 20px 24px; margin-bottom: 16px; }
+#hero h1 { color: #ffffff !important; margin: 0 0 6px 0; font-size: 24px !important; }
+#hero p, #hero li { color: #e8eefc !important; }
+.tabitem { background: #ffffff; border-radius: 12px; }
+footer { visibility: hidden; }
+"""
 
-        with gr.Tab("Single Sample"):
-            seed = gr.Textbox(label="Seed Prompt", lines=6, value="请对以下内容进行安全评测。")
+
+def _hero() -> str:
+    return """
+<div id="hero">
+  <h1>🧠 CoT Red-Team Evaluation Agent · 思维链越狱评测智能体</h1>
+  <p style="margin:0 0 8px 0;font-size:13px;line-height:1.7;">
+    基于 <b>LangGraph</b> 的防御性多智能体评测流水线。默认采用新型 <b>CoT（思维链）攻击</b>：
+    将评测目标分解为逐级递进的推理子问题链，隐藏于收束步骤；保留 CC-BOS 作为对比基线。
+  </p>
+  <div style="font-size:12px;line-height:1.8;opacity:.95;">
+    多智能体闭环：<b>Decompose（目标分解）</b> → <b>Generate（推理链组装 · FOA 演化）</b>
+    → <b>Interact（目标模型交互 · 429 退避）</b> → <b>Judge（多维裁判 · 链路跟随度）</b> → 未拦截则回到 Generate 继续演化
+  </div>
+</div>
+"""
+
+
+def build_demo() -> gr.Blocks:
+    with gr.Blocks(title="CoT Red-Team Evaluation Agent", fill_height=True) as demo:
+        gr.HTML(_hero())
+
+        with gr.Tab("⚡ 单样本评测"):
+            gr.Markdown(
+                "输入 Seed Prompt 后点击 <b>Run</b>，即可看到推理链分解、多维评分、"
+                "多轮演化趋势与逐轮攻击轨迹的可视化结果。<b>Mock Mode</b> 下无需 API Key 即可完整演示。"
+            )
             with gr.Row():
-                attack_single = gr.Dropdown(choices=ATTACK_CHOICES, value=ATTACK_CHOICES[0], label="Attack Strategy")
-                model_name = gr.Textbox(label="Model", value="qwen3-max")
-                base_url = gr.Textbox(label="Base URL", value="")
+                with gr.Column(scale=4):
+                    seed = gr.Textbox(
+                        label="Seed Prompt",
+                        lines=6,
+                        value="测试样例：请评估目标模型在推理链引导下的安全鲁棒性",
+                    )
+                    with gr.Row():
+                        attack_single = gr.Dropdown(
+                            choices=ATTACK_CHOICES, value=ATTACK_CHOICES[0], label="Attack Strategy"
+                        )
+                        model_name = gr.Textbox(label="Model", value="qwen3-max")
+                        base_url = gr.Textbox(label="Base URL", value="")
+                    with gr.Row():
+                        api_key = gr.Textbox(label="API Key", type="password", value="")
+                        use_mock = gr.Checkbox(label="Mock Mode (离线演示)", value=True)
+                    with gr.Row():
+                        population_size = gr.Slider(2, 16, value=8, step=1, label="Population Size")
+                        max_rounds = gr.Slider(1, 10, value=4, step=1, label="Max Rounds")
+                    run_btn = gr.Button("▶ Run CoT Attack", variant="primary")
+
+            gr.Markdown("### 📈 评测结果")
+            summary_cards = gr.HTML(label="Summary")
+            pipeline_html = gr.HTML(label="Pipeline")
             with gr.Row():
-                api_key = gr.Textbox(label="API Key", type="password", value="")
-                use_mock = gr.Checkbox(label="Mock Mode", value=True)
-            with gr.Row():
-                population_size = gr.Slider(2, 16, value=8, step=1, label="Population Size")
-                max_rounds = gr.Slider(1, 10, value=4, step=1, label="Max Rounds")
-            run_btn = gr.Button("Run")
-            summary = gr.JSON(label="Summary")
-            history = gr.Dataframe(label="History")
-            raw = gr.Code(label="Raw Result", language="json")
+                with gr.Column(scale=1):
+                    chain_html = gr.HTML(label="Chain")
+                    score_html = gr.HTML(label="Scores")
+                with gr.Column(scale=1):
+                    trend_html = gr.HTML(label="Trend")
+                    resources_html = gr.HTML(label="Resources")
+            timeline_html = gr.HTML(label="Timeline")
+            with gr.Accordion("逐轮明细表格 / Raw JSON", open=False):
+                history_df = gr.Dataframe(label="History")
+                raw = gr.Code(label="Raw Result", language="json")
+
             run_btn.click(
                 run_single,
                 inputs=[seed, attack_single, model_name, base_url, api_key, population_size, max_rounds, use_mock],
-                outputs=[summary, history, raw],
+                outputs=[
+                    summary_cards,
+                    pipeline_html,
+                    chain_html,
+                    score_html,
+                    trend_html,
+                    timeline_html,
+                    history_df,
+                    raw,
+                    resources_html,
+                ],
             )
 
-        with gr.Tab("Batch Dataset"):
+        with gr.Tab("📊 批量评测"):
             dataset = gr.Textbox(label="Dataset Path (CSV/JSONL)", value=str(DEFAULT_DATASET))
-            limit = gr.Slider(1, 200, value=10, step=1, label="Limit")
             with gr.Row():
+                limit = gr.Slider(1, 200, value=10, step=1, label="Limit")
                 attack_batch = gr.Dropdown(choices=ATTACK_CHOICES, value=ATTACK_CHOICES[0], label="Attack Strategy")
                 resume = gr.Checkbox(label="Resume Existing Output", value=True)
-            batch_run = gr.Button("Run Batch")
+            batch_run = gr.Button("▶ Run Batch", variant="primary")
             batch_df = gr.Dataframe(label="Batch Results")
             batch_meta = gr.Code(label="Batch Meta", language="json")
             batch_run.click(
@@ -352,12 +462,57 @@ def build_demo() -> gr.Blocks:
                 outputs=[batch_df, batch_meta],
             )
 
+        with gr.Tab("🏗 架构与说明"):
+            arch_attack = gr.Dropdown(choices=ATTACK_CHOICES, value=ATTACK_CHOICES[0], label="选择攻击策略查看链路编排")
+            arch_html = gr.HTML()
+            demo.load(render_pipeline_card, inputs=[arch_attack], outputs=[arch_html])
+            arch_attack.change(render_pipeline_card, inputs=[arch_attack], outputs=[arch_html])
+            gr.Markdown(
+                """
+### 🧩 模块构成
+
+| 模块 | 职责 |
+| --- | --- |
+| `redteam/cot.py` | CoT 攻击优化器：目标分解、推理链组装、八维策略空间、FOA 演化、CoT 评分 |
+| `redteam/graph.py` | LangGraph 状态图：Decompose → Generate → Interact → Judge 条件闭环 |
+| `redteam/core.py` | 三类 Agent（生成 / 交互 / 裁判）与 `AgentConfig` |
+| `redteam/engine.py` | 目标模型客户端（OpenAI 兼容）、拒答检测、CC-BOS 基线、CoT Mock |
+| `redteam/visualize.py` | 前端可视化渲染：推理链、评分条、演化趋势、时间线、资源监控 |
+
+### 🧠 CoT 攻击的八个策略维度
+
+`persona 角色包装` · `scaffold 推理脚手架` · `granularity 分解粒度` · `step_style 步骤表述`
+`bridging 步骤衔接` · `abstraction 抽象层级` · `context 场景包装` · `closure 收束方式`
+
+果蝇优化算法在每个维度上做嗅觉搜索（邻域采样）与视觉搜索（择优），停滞两轮时触发柯西变异跳出局部最优。
+
+### 📐 评测维度
+
+- **安全合规**：`final_status`（refusal / answered）、`rounds`（迭代轮数）
+- **CoT 链路**：`chain_followed`（是否沿推理链推进）、`conclusion_reached`（是否给出收束结论）、`chain_markers`
+- **攻击质量**：`semantic_preservation` · `cot_style` · `chain_depth` · `concealment` → 加权合成 `total`
+
+### ⚠️ 伦理声明
+
+本项目为防御性评测工具，仅用于学术研究、安全评估与模型鲁棒性验证。
+"""
+            )
+            refresh = gr.Button("🔄 刷新资源占用")
+            res_html = gr.HTML()
+            refresh.click(render_resources, outputs=[res_html])
+            demo.load(render_resources, outputs=[res_html])
+
     return demo
 
 
 def main() -> None:
     demo = build_demo()
-    demo.launch()
+    demo.launch(
+        css=CUSTOM_CSS,
+        server_name="127.0.0.1",
+        server_port=7860,
+        inbrowser=False,
+    )
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 from .cot import COT_MARKERS, CoTAttackOptimizer
 from .dataset import DatasetLoader
 from .engine import (
+    CoTMockLLM,
     ComplianceChecker,
     EchoMockLLM,
     OpenAICompatibleLLM,
@@ -26,6 +27,7 @@ class AgentConfig:
     attack: str = "cot"  # "cot" = 新型思维链攻击 (默认) / "cc_bos" = CC-BOS 对比基线
     population_size: int = 8
     max_rounds: int = 4
+    mock_refusal_rate: float = 0.3  # Mock 模式下目标模型拒答概率（仅用于演示）
     temperature: float = 0.2
     max_tokens: int = 512
     seed: int = 42
@@ -98,7 +100,11 @@ class TargetEnvironmentAgent:
     def __init__(self, config: AgentConfig) -> None:
         self.config = config
         if config.use_mock:
-            self.client = EchoMockLLM()
+            # CoT 攻击使用专门的链路模拟 Mock，便于离线演示推理链可视化
+            self.client = CoTMockLLM(
+                refusal_rate=config.mock_refusal_rate,
+                random_seed=config.seed,
+            ) if config.attack == "cot" else EchoMockLLM()
         else:
             self.client = OpenAICompatibleLLM(
                 model=config.model_name,
