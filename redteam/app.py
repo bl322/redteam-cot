@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -58,6 +59,44 @@ def render_pipeline_card(attack_label: str) -> str:
 
 def _invoke_with_thread(app, state: Dict[str, Any], thread_id: str):
     return app.invoke(state, config={"configurable": {"thread_id": thread_id}})
+
+
+# ---------------------------------------------------------------------------
+# 取消机制
+#
+# Gradio 的 cancels= 只中断前端，后端生成器仍阻塞在真实模型的 HTTP 调用上，
+# 会一直占着队列槽位，导致下一次点击长时间排队（观感即"卡死"）。
+# 这里用一个全局事件：点「取消」后在下一个节点边界立即退出，快速释放槽位。
+# ---------------------------------------------------------------------------
+_CANCEL_EVENT = threading.Event()
+
+
+def request_cancel() -> tuple:
+    """用户点击取消：置位，运行循环在下一个节点边界退出，并立即恢复 Run 按钮。"""
+    _CANCEL_EVENT.set()
+    return "已请求取消，将在当前环节结束后立即停止（无需等超时），随后可再次运行。", _button_idle()
+
+
+def _button_running(label: str = "▶ Run"):
+    """运行期间禁用按钮：Gradio 同一会话的事件串行调度，重复点击只会排队等待。"""
+    return gr.Button(label, interactive=False, variant="primary")
+
+
+def _button_idle(label: str = "▶ Run"):
+    return gr.Button(label, interactive=True, variant="primary")
+
+
+def _cancelled_html(elapsed: float) -> str:
+    return _partial_outputs(
+        _wrap(
+            _card(
+                "已取消",
+                f'<div style="font-size:13px;line-height:1.7;color:#0f172a;">'
+                f"已在节点边界停止，耗时 {elapsed:.1f}s。</div>",
+                RED,
+            )
+        )
+    )[0]
 
 
 def _summarize(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -179,6 +218,7 @@ def run_single(
     import time
 
     started = time.time()
+    _CANCEL_EVENT.clear()
     try:
         config = AgentConfig(
             model_name=model_name,
@@ -215,6 +255,9 @@ def run_single(
             if not isinstance(update, dict):
                 continue
             for node, payload in update.items():
+                if _CANCEL_EVENT.is_set():
+                    yield _partial_outputs(_cancelled_html(time.time() - started))
+                    return
                 if isinstance(payload, dict):
                     merged.update(payload)
                 round_index = int(merged.get("round_index", 0))
@@ -320,6 +363,7 @@ def run_batch(
     resume: bool = True,
 ):
     """批量评测：每处理完一条样本即 yield 一次，避免长时间黑屏无反馈。"""
+    _CANCEL_EVENT.clear()
     dataset_path = Path(csv_file)
     rows = DatasetLoader(dataset_path).load_records(limit=limit)
     config = AgentConfig(
@@ -367,6 +411,15 @@ def run_batch(
 
     with output_path.open(write_mode, encoding="utf-8") as sink:
         for index, row in enumerate(pending, start=1):
+            if _CANCEL_EVENT.is_set():
+                yield pd.DataFrame(records + [{
+                    "id": "-",
+                    "status": f"已取消（{index - 1}/{len(pending)} 条已完成）",
+                }]), _batch_meta_json(
+                    total, refusals, avg_rounds, by_column, by_primary_domain,
+                    output_path, summary_path, checkpoint_path,
+                )
+                break
             row_id = str(row["id"])
             yield pd.DataFrame(records + [{
                 "id": row_id,
@@ -572,23 +625,28 @@ def build_demo() -> gr.Blocks:
                 history_df = gr.Dataframe(label="History")
                 raw = gr.Code(label="Raw Result", language="json")
 
-            run_event = run_btn.click(
-                run_single,
-                inputs=[seed, attack_single, model_name, base_url, api_key, population_size, max_rounds, max_tokens, use_mock],
-                outputs=[
-                    summary_cards,
-                    report_html,
-                    pipeline_html,
-                    chain_html,
-                    score_html,
-                    trend_html,
-                    timeline_html,
-                    history_df,
-                    raw,
-                    resources_html,
-                ],
+            run_event = (
+                run_btn.click(lambda: _button_running("⏳ 运行中…"), outputs=[run_btn])
+                .then(
+                    run_single,
+                    inputs=[seed, attack_single, model_name, base_url, api_key, population_size, max_rounds, max_tokens, use_mock],
+                    outputs=[
+                        summary_cards,
+                        report_html,
+                        pipeline_html,
+                        chain_html,
+                        score_html,
+                        trend_html,
+                        timeline_html,
+                        history_df,
+                        raw,
+                        resources_html,
+                    ],
+                )
+                .then(lambda: _button_idle("▶ Run CoT Attack"), outputs=[run_btn])
             )
-            cancel_btn.click(None, cancels=[run_event])
+            cancel_note = gr.Markdown("")
+            cancel_btn.click(request_cancel, outputs=[cancel_note, run_btn], cancels=[run_event])
 
         with gr.Tab("📊 批量评测"):
             dataset = gr.Textbox(label="Dataset Path (CSV/JSONL)", value=str(DEFAULT_DATASET))
@@ -605,12 +663,17 @@ def build_demo() -> gr.Blocks:
             )
             batch_df = gr.Dataframe(label="Batch Results")
             batch_meta = gr.Code(label="Batch Meta", language="json")
-            batch_event = batch_run.click(
-                run_batch,
-                inputs=[dataset, limit, attack_batch, model_name, base_url, api_key, population_size, max_rounds, max_tokens, use_mock, resume],
-                outputs=[batch_df, batch_meta],
+            batch_event = (
+                batch_run.click(lambda: _button_running("⏳ 批量运行中…"), outputs=[batch_run])
+                .then(
+                    run_batch,
+                    inputs=[dataset, limit, attack_batch, model_name, base_url, api_key, population_size, max_rounds, max_tokens, use_mock, resume],
+                    outputs=[batch_df, batch_meta],
+                )
+                .then(lambda: _button_idle("▶ Run Batch"), outputs=[batch_run])
             )
-            batch_cancel_btn.click(None, cancels=[batch_event])
+            batch_cancel_note = gr.Markdown("")
+            batch_cancel_btn.click(request_cancel, outputs=[batch_cancel_note, batch_run], cancels=[batch_event])
 
         with gr.Tab("🏗 架构与说明"):
             arch_attack = gr.Dropdown(choices=ATTACK_CHOICES, value=ATTACK_CHOICES[0], label="选择攻击策略查看链路编排")
@@ -657,7 +720,7 @@ def build_demo() -> gr.Blocks:
 
 def main() -> None:
     demo = build_demo()
-    demo.queue(default_concurrency_limit=2).launch(
+    demo.queue(default_concurrency_limit=8, max_size=32).launch(
         css=CUSTOM_CSS,
         server_name="127.0.0.1",
         server_port=7860,
