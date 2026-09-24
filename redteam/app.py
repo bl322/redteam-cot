@@ -15,9 +15,15 @@ from .dataset import DatasetLoader
 from .graph import build_graph
 
 
-ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_DATASET = ROOT / "main" / "data" / "dataset.csv.csv"
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_DATASET = ROOT / "data" / "dataset.csv"
 DEFAULT_BATCH_DIR = ROOT / "results" / "redteam_batch"
+
+ATTACK_CHOICES = ["cot (新型CoT攻击)", "cc_bos (CC-BOS基线)"]
+
+
+def _parse_attack(label: str) -> str:
+    return "cc_bos" if str(label).startswith("cc_bos") else "cot"
 
 
 def _invoke_with_thread(app, state: Dict[str, Any], thread_id: str):
@@ -41,10 +47,11 @@ def _slugify(value: str) -> str:
     return value.strip("._-") or "model"
 
 
-def _default_batch_paths(dataset_path: Path, model_name: str, population_size: int, max_rounds: int) -> tuple[Path, Path, Path]:
+def _default_batch_paths(dataset_path: Path, model_name: str, attack: str, population_size: int, max_rounds: int) -> tuple[Path, Path, Path]:
     stem = dataset_path.stem
     model_slug = _slugify(model_name)
-    suffix = f"p{population_size}_r{max_rounds}"
+    attack_slug = _slugify(attack)
+    suffix = f"{attack_slug}_p{population_size}_r{max_rounds}"
     output_path = DEFAULT_BATCH_DIR / f"{stem}_{model_slug}_{suffix}_batch_eval_results.jsonl"
     summary_path = DEFAULT_BATCH_DIR / f"{stem}_{model_slug}_{suffix}_batch_eval_summary.json"
     checkpoint_path = DEFAULT_BATCH_DIR / f"{stem}_{model_slug}_{suffix}_batch_eval_checkpoint.json"
@@ -82,6 +89,7 @@ def _is_retryable_error(exc: Exception) -> bool:
 
 def run_single(
     seed_text: str,
+    attack_label: str,
     model_name: str,
     base_url: str,
     api_key: str,
@@ -94,6 +102,7 @@ def run_single(
         base_url=base_url or None,
         api_key=api_key or None,
         use_mock=use_mock,
+        attack=_parse_attack(attack_label),
         population_size=population_size,
         max_rounds=max_rounds,
     )
@@ -118,6 +127,7 @@ def run_single(
 def run_batch(
     csv_file: str,
     limit: int,
+    attack_label: str,
     model_name: str,
     base_url: str,
     api_key: str,
@@ -133,11 +143,12 @@ def run_batch(
         base_url=base_url or None,
         api_key=api_key or None,
         use_mock=use_mock,
+        attack=_parse_attack(attack_label),
         population_size=population_size,
         max_rounds=max_rounds,
     )
     app = build_graph(config)
-    output_path, summary_path, checkpoint_path = _default_batch_paths(dataset_path, model_name, population_size, max_rounds)
+    output_path, summary_path, checkpoint_path = _default_batch_paths(dataset_path, model_name, config.attack, population_size, max_rounds)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     existing_records = _load_existing_records(output_path) if resume else []
@@ -297,15 +308,17 @@ def run_batch(
 
 
 def build_demo() -> gr.Blocks:
-    with gr.Blocks(title="CC-BOS Red-Team Evaluation Agent") as demo:
+    with gr.Blocks(title="CoT Red-Team Evaluation Agent") as demo:
         gr.Markdown(
-            "# CC-BOS Red-Team Evaluation Agent\n"
-            "A defensive multi-agent workflow for prompt robustness evaluation."
+            "# CoT Red-Team Evaluation Agent (思维链越狱评测智能体)\n"
+            "基于 LangGraph 的防御性多智能体评测流水线：默认采用新型思维链 (Chain-of-Thought) "
+            "攻击策略，将评测目标分解为逐级递进的推理链进行鲁棒性测试；保留 CC-BOS 作为对比基线。"
         )
 
         with gr.Tab("Single Sample"):
             seed = gr.Textbox(label="Seed Prompt", lines=6, value="请对以下内容进行安全评测。")
             with gr.Row():
+                attack_single = gr.Dropdown(choices=ATTACK_CHOICES, value=ATTACK_CHOICES[0], label="Attack Strategy")
                 model_name = gr.Textbox(label="Model", value="qwen3-max")
                 base_url = gr.Textbox(label="Base URL", value="")
             with gr.Row():
@@ -320,20 +333,22 @@ def build_demo() -> gr.Blocks:
             raw = gr.Code(label="Raw Result", language="json")
             run_btn.click(
                 run_single,
-                inputs=[seed, model_name, base_url, api_key, population_size, max_rounds, use_mock],
+                inputs=[seed, attack_single, model_name, base_url, api_key, population_size, max_rounds, use_mock],
                 outputs=[summary, history, raw],
             )
 
         with gr.Tab("Batch Dataset"):
             dataset = gr.Textbox(label="Dataset Path (CSV/JSONL)", value=str(DEFAULT_DATASET))
             limit = gr.Slider(1, 200, value=10, step=1, label="Limit")
-            resume = gr.Checkbox(label="Resume Existing Output", value=True)
+            with gr.Row():
+                attack_batch = gr.Dropdown(choices=ATTACK_CHOICES, value=ATTACK_CHOICES[0], label="Attack Strategy")
+                resume = gr.Checkbox(label="Resume Existing Output", value=True)
             batch_run = gr.Button("Run Batch")
             batch_df = gr.Dataframe(label="Batch Results")
             batch_meta = gr.Code(label="Batch Meta", language="json")
             batch_run.click(
                 run_batch,
-                inputs=[dataset, limit, model_name, base_url, api_key, population_size, max_rounds, use_mock, resume],
+                inputs=[dataset, limit, attack_batch, model_name, base_url, api_key, population_size, max_rounds, use_mock, resume],
                 outputs=[batch_df, batch_meta],
             )
 

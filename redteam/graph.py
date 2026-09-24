@@ -11,6 +11,8 @@ from .core import AdversarialSampleGenerator, AgentConfig, JudgeAgent, TargetEnv
 class RedTeamState(TypedDict, total=False):
     seed_text: str
     current_text: str
+    attack: str
+    cot_steps: List[str]
     round_index: int
     max_rounds: int
     prompt_candidate: Dict[str, Any]
@@ -30,12 +32,29 @@ def build_graph(config: AgentConfig):
     generator = AdversarialSampleGenerator(config)
     target = TargetEnvironmentAgent(config)
     judge = JudgeAgent()
+    attack = config.attack
+
+    def decompose_node(state: RedTeamState) -> Dict[str, Any]:
+        """CoT 攻击专属节点：把目标分解为推理子问题链。"""
+        seed = state.get("current_text") or state["seed_text"]
+        steps = generator.decompose(seed)
+        trace = _append_trace(state, "decompose", {"steps": steps})
+        return {"cot_steps": steps, "trace": trace}
 
     def generate_node(state: RedTeamState) -> Dict[str, Any]:
         seed = state.get("current_text") or state["seed_text"]
-        candidate = generator.generate(seed)
+        candidate = generator.generate(seed, cot_steps=state.get("cot_steps"))
         round_index = int(state.get("round_index", 0)) + 1
-        trace = _append_trace(state, "generate", {"round": round_index, "prompt": candidate["prompt"][:200]})
+        trace = _append_trace(
+            state,
+            "generate",
+            {
+                "round": round_index,
+                "prompt": candidate["prompt"][:200],
+                "strategy_labels": candidate.get("strategy_labels", {}),
+                "scores": candidate.get("scores", {}),
+            },
+        )
         return {
             "current_text": candidate["prompt"],
             "prompt_candidate": candidate,
@@ -52,7 +71,7 @@ def build_graph(config: AgentConfig):
     def judge_node(state: RedTeamState) -> Dict[str, Any]:
         prompt = state["prompt_candidate"]["prompt"]
         response = state.get("target_response", "")
-        result = judge.evaluate(prompt, response)
+        result = judge.evaluate(prompt, response, attack=attack)
         history_entry = {
             "round": state.get("round_index", 0),
             "prompt": prompt,
@@ -75,7 +94,13 @@ def build_graph(config: AgentConfig):
     graph.add_node("generate", generate_node)
     graph.add_node("interact", interact_node)
     graph.add_node("judge", judge_node)
-    graph.add_edge(START, "generate")
+    if attack == "cot":
+        # CoT 攻击前置一个目标分解节点：START -> decompose -> generate -> ...
+        graph.add_node("decompose", decompose_node)
+        graph.add_edge(START, "decompose")
+        graph.add_edge("decompose", "generate")
+    else:
+        graph.add_edge(START, "generate")
     graph.add_edge("generate", "interact")
     graph.add_edge("interact", "judge")
     graph.add_conditional_edges("judge", route, {"continue": "generate", "stop": END})
