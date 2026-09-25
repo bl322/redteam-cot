@@ -122,7 +122,17 @@ pip install -r requirements.txt
 python -m redteam
 ```
 
-启动后浏览器会打开本地 Gradio 页面。修改代码后仅刷新浏览器无效，须重启后端。
+默认端口 7860；若已被占用会自动向后顺延并在终端打印实际地址（如 `端口 7860 已被占用，自动改用 7861`）。也可显式指定：
+
+```bash
+# Windows (cmd)
+set GRADIO_SERVER_PORT=7861 && python -m redteam
+
+# Linux / macOS / Git Bash
+GRADIO_SERVER_PORT=7861 python -m redteam
+```
+
+修改代码后仅刷新浏览器无效，须重启后端。若启动时报 `Cannot find empty port`，说明旧实例仍在运行，先结束占用进程或换端口。
 
 ## 前端可视化页面
 
