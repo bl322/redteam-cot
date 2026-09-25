@@ -719,12 +719,33 @@ def build_demo() -> gr.Blocks:
     return demo
 
 
+def _resolve_port(preferred: int = 7860) -> int:
+    """返回 preferred 起第一个可用的端口，避免旧实例未退出时启动失败。"""
+    import socket
+
+    for offset in range(0, 20):
+        port = preferred + offset
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(("127.0.0.1", port))
+                return port
+            except OSError:
+                continue
+    raise OSError(f"在 {preferred}-{preferred + 19} 范围内找不到可用端口，请先关闭占用的进程。")
+
+
 def main() -> None:
+    preferred = int(os.getenv("GRADIO_SERVER_PORT", "7860"))
+    port = _resolve_port(preferred)
+    if port != preferred:
+        print(f"[redteam] 端口 {preferred} 已被占用，自动改用 {port}")
+    print(f"[redteam] 服务地址: http://127.0.0.1:{port}")
     demo = build_demo()
     demo.queue(default_concurrency_limit=8, max_size=32).launch(
         css=CUSTOM_CSS,
         server_name="127.0.0.1",
-        server_port=7860,
+        server_port=port,
         show_error=True,
         inbrowser=False,
     )
