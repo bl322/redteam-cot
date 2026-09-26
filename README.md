@@ -116,6 +116,11 @@ cd redteam
 pip install -r requirements.txt
 ```
 
+> ⚠️ **Gradio 版本必须 ≥ 6.16.0**。6.14 及以下存在已知前端 bug
+> （[gradio#13240](https://github.com/gradio-app/gradio/pull/13240)，6.16.0 修复）：
+> 切换标签页触发 tab select 事件并给 `gr.Dataframe` 赋值时，**浏览器整页卡死**。
+> 已升级到 6.28.0 验证通过。若之前装过旧版，请执行 `pip install -U "gradio>=6.16"` 并**强制刷新页面**（Ctrl+F5）。
+
 ## 启动
 
 ```bash

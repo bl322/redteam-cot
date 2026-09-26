@@ -1,3 +1,7 @@
 results/
 __pycache__/
 *.pyc
+probe*.log
+fg.log
+server*.log
+artifacts/
