@@ -92,6 +92,42 @@ NODE_LABELS = {
 }
 
 
+def render_batch_progress(
+    index: int,
+    total: int,
+    node: str = "",
+    elapsed: float = 0.0,
+    eta: Optional[float] = None,
+    status: str = "",
+) -> str:
+    """批量评测进度卡片：第 index/total 条 · 当前节点 · 已耗时 · 预计剩余。"""
+    ratio = 0.0 if total <= 0 else max(0.0, min(1.0, (index - 1) / float(total)))
+    node_text = NODE_LABELS.get(node, node or "准备中")
+    eta_text = f"预计剩余 {eta:.0f}s" if eta else "预计剩余 计算中…"
+    status_badge = ""
+    if status:
+        color = GREEN if status == "answered" else RED
+        status_badge = _badge(f"上一条：{status}", color, "#ffffff")
+    bar = (
+        f'<div style="height:10px;border-radius:999px;background:#eef2f7;overflow:hidden;">'
+        f'<div style="height:10px;width:{ratio * 100:.1f}%;background:{ACCENT};'
+        f'border-radius:999px;transition:width .3s;"></div></div>'
+    )
+    return _wrap(
+        _card(
+            f"批量执行中 · 第 {index} / {total} 条",
+            f'<div style="display:flex;justify-content:space-between;font-size:12px;'
+            f'margin-bottom:6px;"><span style="color:{SLATE};">当前节点：<b>{_esc(node_text)}</b></span>'
+            f'<span style="color:{SLATE};">已耗时 {elapsed:.1f}s · {eta_text}</span></div>'
+            + bar
+            + f'<div style="margin-top:8px;">{status_badge}'
+            + f'<span style="font-size:12px;color:{SLATE};">'
+            "逐条实时落盘，中途取消不会丢失已完成样本</span></div>",
+            ACCENT,
+        )
+    )
+
+
 def render_progress(
     round_index: int,
     max_rounds: int,

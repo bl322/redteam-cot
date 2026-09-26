@@ -16,10 +16,12 @@ from .core import AgentConfig
 from .dataset import DatasetLoader
 from .graph import build_graph
 from .visualize import (
+    GREEN,
     RED,
     _card,
     _esc,
     _wrap,
+    render_batch_progress,
     render_chain,
     render_pipeline,
     render_progress,
@@ -310,6 +312,23 @@ def _partial_outputs(progress_html: str) -> tuple:
     )
 
 
+def _batch_display_rows(records: Sequence[Dict[str, Any]], limit: int = 80) -> List[Dict[str, Any]]:
+    """表格展示用：截断超长字段（数据集原始 goal 可达上千字），避免前端渲染卡顿。
+
+    写盘仍是完整内容，此处只影响界面。
+    """
+    rows: List[Dict[str, Any]] = []
+    for record in records:
+        row: Dict[str, Any] = {}
+        for key, value in record.items():
+            if isinstance(value, str) and len(value) > limit:
+                row[key] = value[:limit] + "…"
+            else:
+                row[key] = value
+        rows.append(row)
+    return rows
+
+
 def _batch_meta_json(
     total: int,
     refusals: int,
@@ -405,48 +424,107 @@ def run_batch(
 
     write_mode = "a" if resume else "w"
     pending = [row for row in rows if str(row["id"]) not in processed_ids]
-    yield pd.DataFrame(records), _batch_meta_json(
-        total, refusals, avg_rounds, by_column, by_primary_domain,
-        output_path, summary_path, checkpoint_path,
+    started_at = time.time()
+    done_count = 0
+
+    def _eta() -> Optional[float]:
+        """按已完成样本的平均耗时估算剩余时间。"""
+        if done_count <= 0:
+            return None
+        per_item = (time.time() - started_at) / done_count
+        return per_item * (len(pending) - done_count)
+
+    def _progress(index: int, node: str = "", status: str = "") -> str:
+        return render_batch_progress(
+            index, len(pending), node, time.time() - started_at, _eta(), status
+        )
+
+    yield (
+        pd.DataFrame(_batch_display_rows(records)),
+        _batch_meta_json(
+            total, refusals, avg_rounds, by_column, by_primary_domain,
+            output_path, summary_path, checkpoint_path,
+        ),
+        _progress(1, "准备中"),
     )
 
     with output_path.open(write_mode, encoding="utf-8") as sink:
         for index, row in enumerate(pending, start=1):
             if _CANCEL_EVENT.is_set():
-                yield pd.DataFrame(records + [{
-                    "id": "-",
-                    "status": f"已取消（{index - 1}/{len(pending)} 条已完成）",
-                }]), _batch_meta_json(
-                    total, refusals, avg_rounds, by_column, by_primary_domain,
-                    output_path, summary_path, checkpoint_path,
+                yield (
+                    pd.DataFrame(_batch_display_rows(records + [{
+                        "id": "-",
+                        "status": f"已取消（{index - 1}/{len(pending)} 条已完成）",
+                    }])),
+                    _batch_meta_json(
+                        total, refusals, avg_rounds, by_column, by_primary_domain,
+                        output_path, summary_path, checkpoint_path,
+                    ),
+                    _cancelled_html(time.time() - started_at),
                 )
                 break
             row_id = str(row["id"])
-            yield pd.DataFrame(records + [{
-                "id": row_id,
-                "status": f"processing {index}/{len(pending)}",
-            }]), _batch_meta_json(
-                total, refusals, avg_rounds, by_column, by_primary_domain,
-                output_path, summary_path, checkpoint_path,
+            yield (
+                pd.DataFrame(_batch_display_rows(records + [{
+                    "id": row_id,
+                    "status": f"processing {index}/{len(pending)}",
+                }])),
+                _batch_meta_json(
+                    total, refusals, avg_rounds, by_column, by_primary_domain,
+                    output_path, summary_path, checkpoint_path,
+                ),
+                _progress(index, "请求目标模型"),
             )
 
             result: Optional[Dict[str, Any]] = None
             error_text: Optional[str] = None
+            last_status = ""
             delay = 1.0
             for attempt in range(1, 6):
                 try:
-                    result = _invoke_with_thread(
-                        app,
-                        {
-                            "seed_text": row["goal"],
-                            "current_text": row["goal"],
-                            "round_index": 0,
-                            "max_rounds": max_rounds,
-                            "trace": [],
-                            "history": [],
-                        },
-                        f"batch-{row_id}",
-                    )
+                    state: Dict[str, Any] = {
+                        "seed_text": row["goal"],
+                        "current_text": row["goal"],
+                        "round_index": 0,
+                        "max_rounds": max_rounds,
+                        "trace": [],
+                        "history": [],
+                    }
+                    # 逐节点流式推进，界面能实时看到"第几条 · 当前节点"
+                    for update in app.stream(
+                        state,
+                        config={"configurable": {"thread_id": f"batch-{row_id}"}},
+                        stream_mode="updates",
+                    ):
+                        if _CANCEL_EVENT.is_set():
+                            yield (
+                                pd.DataFrame(_batch_display_rows(records)),
+                                _batch_meta_json(
+                                    total, refusals, avg_rounds, by_column, by_primary_domain,
+                                    output_path, summary_path, checkpoint_path,
+                                ),
+                                _cancelled_html(time.time() - started_at),
+                            )
+                            return
+                        if not isinstance(update, dict):
+                            continue
+                        for node, payload in update.items():
+                            if isinstance(payload, dict):
+                                state.update(payload)
+                            if state.get("history"):
+                                last_status = str(state["history"][-1].get("judge", {}).get("status", ""))
+                            yield (
+                                pd.DataFrame(_batch_display_rows(records + [{
+                                    "id": row_id,
+                                    "status": f"processing {index}/{len(pending)}",
+                                }])),
+                                _batch_meta_json(
+                                    total, refusals, avg_rounds, by_column, by_primary_domain,
+                                    output_path, summary_path, checkpoint_path,
+                                ),
+                                _progress(index, node, last_status),
+                            )
+                    result = state
                     break
                 except Exception as exc:
                     error_text = f"{type(exc).__name__}: {exc}"
@@ -526,9 +604,14 @@ def run_batch(
             checkpoint_path.write_text(json.dumps(checkpoint, ensure_ascii=False, indent=2), encoding="utf-8")
             summary_path.write_text(json.dumps(checkpoint["summary"], ensure_ascii=False, indent=2), encoding="utf-8")
 
-            yield pd.DataFrame(records), _batch_meta_json(
-                total, refusals, avg_rounds, by_column, by_primary_domain,
-                output_path, summary_path, checkpoint_path,
+            done_count += 1
+            yield (
+                pd.DataFrame(_batch_display_rows(records)),
+                _batch_meta_json(
+                    total, refusals, avg_rounds, by_column, by_primary_domain,
+                    output_path, summary_path, checkpoint_path,
+                ),
+                _progress(index + 1, "已完成该条", last_status),
             )
 
     summary_json = _batch_meta_json(
@@ -538,7 +621,16 @@ def run_batch(
     summary_path.write_text(
         json.dumps(json.loads(summary_json), ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    yield pd.DataFrame(records), summary_json
+    done_html = _wrap(
+        _card(
+            f"批量完成 · 共 {total} 条",
+            f'<div style="font-size:13px;color:#0f172a;">本次处理 {len(pending)} 条，'
+            f'总耗时 {time.time() - started_at:.1f}s，拒答 {refusals} 条。</div>'
+            f'<div style="font-size:12px;color:#475569;margin-top:6px;">结果文件：{_esc(str(output_path))}</div>',
+            GREEN if refusals else ACCENT,
+        )
+    )
+    yield pd.DataFrame(_batch_display_rows(records)), summary_json, done_html
 
 
 CUSTOM_CSS = """
@@ -652,7 +744,7 @@ def build_demo() -> gr.Blocks:
         with gr.Tab("📊 批量评测"):
             dataset = gr.Textbox(label="Dataset Path (CSV/JSONL)", value=str(DEFAULT_DATASET))
             with gr.Row():
-                limit = gr.Slider(1, 200, value=10, step=1, label="Limit")
+                limit = gr.Slider(1, 200, value=3, step=1, label="Limit")
                 attack_batch = gr.Dropdown(choices=ATTACK_CHOICES, value=ATTACK_CHOICES[0], label="Attack Strategy")
                 resume = gr.Checkbox(label="Resume Existing Output", value=True)
             with gr.Row():
@@ -662,6 +754,7 @@ def build_demo() -> gr.Blocks:
                 "<span style='font-size:12px;color:#475569;'>批量任务逐条实时落盘并刷新表格；"
                 "真实模型下建议先设 Limit=3 试跑，确认单条耗时后再放大。</span>"
             )
+            batch_progress = gr.HTML()
             batch_df = gr.Dataframe(label="Batch Results")
             batch_meta = gr.Code(label="Batch Meta", language="json")
             batch_event = (
@@ -669,7 +762,7 @@ def build_demo() -> gr.Blocks:
                 .then(
                     run_batch,
                     inputs=[dataset, limit, attack_batch, model_name, base_url, api_key, population_size, max_rounds, max_tokens, use_mock, resume],
-                    outputs=[batch_df, batch_meta],
+                    outputs=[batch_df, batch_meta, batch_progress],
                 )
                 .then(lambda: _button_idle("▶ Run Batch"), outputs=[batch_run])
             )
