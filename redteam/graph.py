@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import os
+
 from typing import Any, Dict, List, TypedDict
 
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 from .core import AdversarialSampleGenerator, AgentConfig, JudgeAgent, TargetEnvironmentAgent
+from .engine import LLMJudge
 
 
 class RedTeamState(TypedDict, total=False):
@@ -31,7 +34,13 @@ def _append_trace(state: RedTeamState, node: str, payload: Dict[str, Any]) -> Li
 def build_graph(config: AgentConfig):
     generator = AdversarialSampleGenerator(config)
     target = TargetEnvironmentAgent(config)
-    judge = JudgeAgent()
+    llm_judge = None
+    if config.use_llm_judge and not config.use_mock and (config.api_key or os.getenv("LLM_API_KEY")):
+        try:
+            llm_judge = LLMJudge(config)
+        except Exception:
+            llm_judge = None  # 判分通道不可用时退回关键词裁判，不阻断评测
+    judge = JudgeAgent(llm_judge=llm_judge)
     attack = config.attack
 
     def decompose_node(state: RedTeamState) -> Dict[str, Any]:
