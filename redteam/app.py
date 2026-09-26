@@ -16,6 +16,7 @@ from .core import AgentConfig
 from .dataset import DatasetLoader
 from .graph import build_graph
 from .visualize import (
+    ACCENT,
     GREEN,
     RED,
     _card,
