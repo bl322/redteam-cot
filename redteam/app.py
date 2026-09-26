@@ -117,6 +117,11 @@ def _summarize(result: Dict[str, Any]) -> Dict[str, Any]:
     if history:
         summary["chain_follow_rate"] = f"{followed / len(history) * 100:.0f}%"
         summary["conclusion_reached"] = bool(judges[-1].get("conclusion_reached"))
+        # 留存末轮响应与拒答依据，便于人工复核「真拒答」还是「误判」
+        summary["last_response"] = (history[-1].get("response") or "")[:200]
+        evidence = judges[-1].get("refusal_evidence")
+        if evidence:
+            summary["refusal_evidence"] = str(evidence)[:200]
     return summary
 
 
