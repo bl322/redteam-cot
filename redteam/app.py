@@ -812,6 +812,24 @@ def build_demo() -> gr.Blocks:
     return demo
 
 
+def _build_theme():
+    """使用系统本地字体，避免从 Google Fonts 加载外部样式。
+
+    Gradio 默认主题会注入 https://fonts.googleapis.com/css2?... 到
+    config.stylesheets，而前端是 **await 该样式表加载完成后才渲染页面**
+    （见 Index-*.js 的 ze() 逻辑）。国内网络访问 fonts.googleapis.com
+    往往长时间挂起，表现为页面一直转圈 / 点击无响应（观感即"卡死"）。
+    改用系统字体后不再有外部请求。
+    """
+    try:
+        return gr.themes.Soft(
+            font=["Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "system-ui", "sans-serif"],
+            font_mono=["Cascadia Mono", "Consolas", "Menlo", "monospace"],
+        )
+    except Exception:  # 主题构造失败时退回默认主题，不影响启动
+        return None
+
+
 def _resolve_port(preferred: int = 7860) -> int:
     """返回 preferred 起第一个可用的端口，避免旧实例未退出时启动失败。"""
     import socket
@@ -837,10 +855,13 @@ def main() -> None:
     demo = build_demo()
     demo.queue(default_concurrency_limit=8, max_size=32).launch(
         css=CUSTOM_CSS,
+        theme=_build_theme(),
         server_name="127.0.0.1",
         server_port=port,
         show_error=True,
         inbrowser=False,
+        # 页面不依赖任何外部 CDN / 字体，纯离线可渲染
+        head=None,
     )
 
 
