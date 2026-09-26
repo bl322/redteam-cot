@@ -665,10 +665,44 @@ def build_demo() -> gr.Blocks:
     with gr.Blocks(title="CoT Red-Team Evaluation Agent", fill_height=True) as demo:
         gr.HTML(_hero())
 
+        # 目标模型 / 接口 / 运行参数放在全局区域：单样本页与批量页共用同一套配置。
+        # 之前这些输入框只存在于「单样本评测」页，切到批量页看不见却被静默复用，
+        # 容易被误认为「批量只能离线」。
+        with gr.Accordion("🎯 目标模型 / 接口配置（单样本与批量共用）", open=True):
+            with gr.Row():
+                model_name = gr.Textbox(label="Model", value="qwen3-max")
+                base_url = gr.Textbox(
+                    label="Base URL",
+                    value="",
+                    placeholder="ws-m0wca....maas.aliyuncs.com（只填域名即可）",
+                    info="只填域名即可：缺协议自动补 https://，兼容路径（如百炼的 /compatible-mode/v1）会自动探测",
+                )
+            with gr.Row():
+                api_key = gr.Textbox(label="API Key", type="password", value="")
+                use_mock = gr.Checkbox(
+                    label="Mock Mode 离线演示（勾选=不联网、无需 Key；取消勾选=真实模型在线评测）",
+                    value=True,
+                )
+            with gr.Row():
+                population_size = gr.Slider(2, 16, value=8, step=1, label="Population Size")
+                max_rounds = gr.Slider(1, 10, value=2, step=1, label="Max Rounds")
+            max_tokens = gr.Slider(
+                256, 4096, value=1024, step=128,
+                label="Max Tokens（真实模型输出较长，过小会截断）",
+            )
+            gr.Markdown(
+                "<span style='font-size:12px;color:#475569;'>"
+                "<b>想用真实模型跑批量？</b>取消勾选 <b>Mock Mode</b> → 填入上面的 Base URL 与 API Key → "
+                "去「📊 批量评测」设好 Limit 点 <b>Run Batch</b>。"
+                "批量每条样本会对目标模型发起多次请求（分解 / 生成 / 交互 / 裁判），建议先 Limit=3 试跑估时；"
+                "支持断点续跑（Resume Existing Output），结果逐条写入 <code>results/redteam_batch/</code>。</span>"
+            )
+
         with gr.Tab("⚡ 单样本评测"):
             gr.Markdown(
                 "输入 Seed Prompt 后点击 <b>Run</b>，即可看到推理链分解、多维评分、"
-                "多轮演化趋势与逐轮攻击轨迹的可视化结果。<b>Mock Mode</b> 下无需 API Key 即可完整演示。"
+                "多轮演化趋势与逐轮攻击轨迹的可视化结果。目标模型与是否联网由页面顶部的"
+                "<b>🎯 目标模型 / 接口配置</b> 决定（<b>Mock Mode</b> 下无需 API Key 即可完整演示）。"
             )
             with gr.Row():
                 with gr.Column(scale=4):
@@ -677,28 +711,9 @@ def build_demo() -> gr.Blocks:
                         lines=6,
                         value="测试样例：请评估目标模型在推理链引导下的安全鲁棒性",
                     )
-                    with gr.Row():
-                        attack_single = gr.Dropdown(
-                            choices=ATTACK_CHOICES, value=ATTACK_CHOICES[0], label="Attack Strategy"
-                        )
-                        model_name = gr.Textbox(label="Model", value="qwen3-max")
-                        base_url = gr.Textbox(
-                            label="Base URL",
-                            value="",
-                            placeholder="ws-m0wca....maas.aliyuncs.com（只填域名即可）",
-                            info="只填域名即可：缺协议自动补 https://，兼容路径（如百炼的 /compatible-mode/v1）会自动探测",
-                        )
-                    with gr.Row():
-                        api_key = gr.Textbox(label="API Key", type="password", value="")
-                        use_mock = gr.Checkbox(label="Mock Mode (离线演示)", value=True)
-                    with gr.Row():
-                        population_size = gr.Slider(2, 16, value=8, step=1, label="Population Size")
-                        max_rounds = gr.Slider(1, 10, value=2, step=1, label="Max Rounds")
-                    with gr.Row():
-                        max_tokens = gr.Slider(
-                            256, 4096, value=1024, step=128,
-                            label="Max Tokens（真实模型输出较长，过小会截断）",
-                        )
+                    attack_single = gr.Dropdown(
+                        choices=ATTACK_CHOICES, value=ATTACK_CHOICES[0], label="Attack Strategy"
+                    )
                     with gr.Row():
                         run_btn = gr.Button("▶ Run CoT Attack", variant="primary")
                         cancel_btn = gr.Button("■ 取消", variant="stop")
@@ -752,8 +767,10 @@ def build_demo() -> gr.Blocks:
                 batch_run = gr.Button("▶ Run Batch", variant="primary")
                 batch_cancel_btn = gr.Button("■ 取消", variant="stop")
             gr.Markdown(
-                "<span style='font-size:12px;color:#475569;'>批量任务逐条实时落盘并刷新表格；"
-                "真实模型下建议先设 Limit=3 试跑，确认单条耗时后再放大。</span>"
+                "<span style='font-size:12px;color:#475569;'>"
+                "是否离线由页面顶部的 <b>Mock Mode</b> 决定：勾选 = 离线演示，"
+                "取消勾选并填 Base URL + API Key = 真实模型在线评测。"
+                "真实模型下建议先 Limit=3 试跑，确认单条耗时后再放大。</span>"
             )
             batch_progress = gr.HTML()
             batch_df = gr.Dataframe(label="Batch Results")
