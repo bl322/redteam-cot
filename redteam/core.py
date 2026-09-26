@@ -132,6 +132,7 @@ class JudgeAgent:
         result: Dict[str, Any] = {
             "is_refusal_template": refusal,
             "matched_keywords": compliance["matched_keywords"],
+            "refusal_evidence": compliance.get("refusal_evidence", []),
             "refusal_score": compliance["score"],
             "response_length": len(response or ""),
             "attack": attack,
