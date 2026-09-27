@@ -427,6 +427,14 @@ def run_batch(
     harm_scores = [
         float(row["harmfulness"]) for row in existing_records if row.get("harmfulness") is not None
     ]
+    # 峰值有害度更能反映「攻击推进到了哪一步」：末轮回落为 0 往往只是收束步被拦
+    peak_scores = [
+        float(row["max_harmfulness"]) for row in existing_records if row.get("max_harmfulness") is not None
+    ]
+    status_counts: Dict[str, int] = {}
+    for row in existing_records:
+        key = str(row.get("final_status", "unknown"))
+        status_counts[key] = status_counts.get(key, 0) + 1
     attack_successes = sum(1 for row in existing_records if bool(row.get("attack_success")))
     by_column: Dict[str, Dict[str, float]] = {}
     by_primary_domain: Dict[str, Dict[str, float]] = {}
@@ -600,6 +608,10 @@ def run_batch(
             avg_rounds.append(rounds)
             if record.get("harmfulness") is not None:
                 harm_scores.append(float(record["harmfulness"]))
+            if record.get("max_harmfulness") is not None:
+                peak_scores.append(float(record["max_harmfulness"]))
+            status_key = str(record.get("final_status", "unknown"))
+            status_counts[status_key] = status_counts.get(status_key, 0) + 1
             attack_successes += int(bool(record.get("attack_success")))
             by_column.setdefault(row.get("source_column", "unknown"), {"num_samples": 0, "num_refusals": 0, "style_score_sum": 0.0})
             by_primary_domain.setdefault(row["primary_domain"], {"num_samples": 0, "num_refusals": 0, "style_score_sum": 0.0})
@@ -620,7 +632,9 @@ def run_batch(
                     "refusal_trigger_rate": round(refusals / total if total else 0.0, 4),
                     "avg_rounds": round(sum(avg_rounds) / total if total else 0.0, 4),
                     "avg_harmfulness": round(sum(harm_scores) / len(harm_scores), 4) if harm_scores else None,
+                    "avg_max_harmfulness": round(sum(peak_scores) / len(peak_scores), 4) if peak_scores else None,
                     "attack_success_rate": round(attack_successes / total, 4) if total else 0.0,
+                    "status_breakdown": dict(sorted(status_counts.items())),
                     "by_source_column": {
                         key: {
                             "num_samples": int(stats["num_samples"]),
@@ -670,8 +684,14 @@ def run_batch(
             f'总耗时 {time.time() - started_at:.1f}s，拒答 {refusals} 条。</div>'
             + (
                 f'<div style="font-size:13px;color:#0f172a;margin-top:2px;">LLM 精判：'
-                f'平均有害度 {sum(harm_scores) / len(harm_scores):.2f}/5，'
-                f'攻击真实得手 {attack_successes}/{total} 条。</div>'
+                f'平均有害度 {sum(harm_scores) / len(harm_scores):.2f}/5'
+                + (f'（峰值 {sum(peak_scores) / len(peak_scores):.2f}/5）' if peak_scores else "")
+                + f'，攻击真实得手 {attack_successes}/{total} 条。</div>'
+                + (
+                    '<div style="font-size:12px;color:#475569;">失败模式分布：'
+                    + " · ".join(f"{_esc(k)} {v}" for k, v in sorted(status_counts.items()))
+                    + "</div>"
+                )
                 if harm_scores
                 else ""
             )
