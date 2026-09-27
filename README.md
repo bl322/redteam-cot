@@ -92,9 +92,20 @@ flowchart TD
   - `core.py`：生成 / 交互 / 裁判三类 Agent
   - `engine.py`：目标模型客户端、拒答检测、CC-BOS 基线、CoT Mock
   - `app.py`：Gradio 前端页面
-- `data/`：评测数据集
+- `data/`：评测数据集（含分层抽样子集 `dataset_sample100.csv`）
 - `scripts/smoke_test.py`：Mock 模式离线冒烟测试
 - `results/redteam_batch/`：批量评测输出
+- `scripts/`：评测与报告工具链
+  - `make_sample.py`：从全量数据集做**分层随机抽样**（每行依照一级领域比例 + 每域保底，
+    领域内再按二级领域分配），产出领域均衡的小样本评测集。直接 `--limit 100` 只会取到
+    前 100 行——实测全部落在同一个一级领域，报告里的领域对比会完全失真，务必先抽样。
+  - `run_batch_cli.py`：终端长跑批量评测（浏览器跑 100 条约 1.5-2h 容易会话超时断连）。
+    结果逐条落盘、`Ctrl+C` 后重跑自动断点续跑；Key 通过 `LLM_API_KEY` 环境变量传入。
+  - `build_report_data.py`：把 JSONL 结果聚合成报告指标（ASR / 有害度 / 领域下钻 /
+    有害度分布 / 峰值样本），可带 `--baseline` 做 CoT vs CC-BOS 对照，输出统计 JSON。
+  - `build_report_docx.py`：读取统计 JSON 生成 `.docx` 评测报告（含 5 张图表、
+    一级/二级领域对比表、归因分析与局限说明）。所有叙事结论按数据自适应，不写死。
+  - `compare_runs.py` / `*_regress.py`：A/B 对照与拒答 / 精判 / 伪合规三组离线回归测试
 - `requirements.txt`：依赖列表
 
 ## 主要功能
@@ -262,6 +273,32 @@ CC-BOS 基线沿用原有评分维度（`classical_style` / `brevity_balance` / 
 `Batch Meta` 里优先看 `refusal_trigger_rate`：
 - **拒答率高** = 目标模型整体防线较稳；再去 `by_primary_domain` 找低拒答率的领域定位薄弱环节
 - **拒答率低** = 该数据集普遍被绕过；下钻到具体样本的 Raw JSON 复核是否为真绕过
+
+## 评测报告流水线（100 条在线评测 → docx 报告）
+
+```bash
+# 1) 分层抽样：产出领域均衡的 100 条样本
+python scripts/make_sample.py --size 100 --floor 10 --out data/dataset_sample100.csv
+
+# 2) 终端长跑（Key 走环境变量；Ctrl+C 后重跑自动续跑）
+export LLM_BASE_URL="ws-xxxx.cn-beijing.maas.aliyuncs.com" LLM_API_KEY="sk-xxxx"
+python scripts/run_batch_cli.py --dataset data/dataset_sample100.csv \
+    --limit 100 --attack cot --population 8 --rounds 3 --judge
+
+# 3) 聚合指标（可选 --baseline 带 CC-BOS 对照）
+python scripts/build_report_data.py \
+    results/redteam_batch/dataset_sample100_qwen3-max_cot_p8_r3_batch_eval_results.jsonl \
+    --json-out artifacts/report_stats.json
+
+# 4) 生成报告
+python scripts/build_report_docx.py artifacts/report_stats.json \
+    --out artifacts/CoT越狱攻击安全评测报告-qwen3.docx
+```
+
+**口径提醒**（报告第 2 节有完整说明）：拒答率是**防御得分**，不是攻击成功率；
+关键词判定的 `answered` 也混有大量「合规话术包裹」的假配合。攻击效果只用
+LLM 精判的 `attack_success_rate` + 有害度（0-5）衡量，峰值有害度反映攻击
+实际推进到的深度。
 
 ## Seed Prompt 怎么写（含示例）
 

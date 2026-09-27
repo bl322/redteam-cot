@@ -398,6 +398,7 @@ def run_batch(
     use_mock: bool,
     resume: bool = True,
     use_llm_judge: bool = False,
+    retry_errors: bool = False,
 ):
     """批量评测：每处理完一条样本即 yield 一次，避免长时间黑屏无反馈。"""
     _CANCEL_EVENT.clear()
@@ -419,6 +420,15 @@ def run_batch(
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     existing_records = _load_existing_records(output_path) if resume else []
+    if retry_errors:
+        # 请求失败（额度耗尽/403/超时）的样本是缺失数据，续跑时应重跑而非跳过。
+        # 结果文件是 append 模式，所以必须先把失败行从磁盘上抹掉，否则同 id 会有两条记录。
+        kept = [row for row in existing_records if "error" not in row]
+        if len(kept) != len(existing_records):
+            with output_path.open("w", encoding="utf-8") as sink:
+                for row in kept:
+                    sink.write(json.dumps(row, ensure_ascii=False) + "\n")
+        existing_records = kept
     processed_ids = {str(row.get("id", "")).strip() for row in existing_records if str(row.get("id", "")).strip()}
     records: List[Dict[str, Any]] = list(existing_records)
     total = len(existing_records)
