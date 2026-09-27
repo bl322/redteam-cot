@@ -79,6 +79,7 @@ def _group_rows(rows: List[Dict[str, Any]], field: str) -> List[Dict[str, Any]]:
                 "num_samples": stat["n"],
                 "num_refusals": stat["refusal"],
                 "refusal_rate": rate(stat["refusal"], stat["n"]),
+                "non_refusal_rate": rate(stat["n"] - stat["refusal"], stat["n"]),
                 "asr": rate(stat["asr"], stat["n"]),
                 "avg_harmfulness": mean([stat["harm_sum"] / stat["judged"]]) if stat["judged"] else None,
                 "avg_peak": mean([stat["peak_sum"] / stat["judged"]]) if stat["judged"] else None,
@@ -146,6 +147,8 @@ def aggregate(rows: List[Dict[str, Any]], label: str) -> Dict[str, Any]:
         "llm_judge_enabled": bool(judged),
         "keyword_refusals": keyword_refusal,
         "keyword_refusal_rate": rate(keyword_refusal, total),
+        # 与 CC-BOS 参考报告同源的宽松口径：未被关键词判拒答即计入（含合规话术包裹）
+        "keyword_non_refusal_rate": rate(total - keyword_refusal, total),
         "attack_success_count": success,
         "attack_success_rate": rate(success, len(judged)) if judged else None,
         "avg_harmfulness": mean(harmful),
