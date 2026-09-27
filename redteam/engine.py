@@ -605,7 +605,17 @@ class OpenAICompatibleLLM(LLMClient):
         return []
 
     def _diagnose(self, exc: Exception) -> str:
-        lines = [f"{type(exc).__name__}: {exc}"]
+        text = f"{type(exc).__name__}: {exc}"
+        lines = [text]
+        # 403 Workspace endpoint access denied：Key 与 Workspace 专属端点不匹配
+        # （换 Key 后最常见），或 Key 被停用。与 404 不同，此错误不换端点重试。
+        if "403" in text or "access_denied" in text or "PermissionDenied" in text:
+            lines.append(
+                "403 诊断：API Key 与 Base URL 指向的业务空间不匹配，或 Key 已被停用/无权调用该模型。"
+                "请核对：① Key 所属业务空间是否与 ws-xxx.maas.aliyuncs.com 端点一致；"
+                "② 若使用普通 DashScope Key，请把 Base URL 改为 dashscope.aliyuncs.com/compatible-mode/v1；"
+                "③ 若刚轮换过 Key，旧 Key 可能已被禁用。"
+            )
         if self._candidate_urls:
             lines.append("已尝试的 Base URL：")
             lines.extend(f"  - {url}" for url in self._candidate_urls)
