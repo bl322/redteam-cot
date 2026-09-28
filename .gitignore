@@ -4,6 +4,5 @@ probe*.log
 fg.log
 server*.log
 *.log
-# 调试截图不入库（artifacts/ 下的其余统计产物入库）
-artifacts/*.png
+artifacts/
 ~$*.docx

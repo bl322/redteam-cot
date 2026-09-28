@@ -6,9 +6,6 @@
     "num_refusals": 17,
     "refusal_trigger_rate": 0.17,
     "avg_rounds": 1.74,
-    "avg_harmfulness": 0.6667,
-    "avg_max_harmfulness": 1.2121,
-    "attack_success_rate": 0.0,
     "status_breakdown": {
       "deflection": 34,
       "error": 34,

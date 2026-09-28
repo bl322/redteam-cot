@@ -8,11 +8,11 @@ API Key 通过环境变量传入，避免出现在命令行历史或日志里：
     # Windows PowerShell
     $env:LLM_BASE_URL = "ws-m0wca268n7l2xi1w.cn-beijing.maas.aliyuncs.com"
     $env:LLM_API_KEY  = "sk-xxxxxx"
-    python scripts/run_batch_cli.py --limit 100 --attack cot --judge
+    python scripts/run_batch_cli.py --limit 100 --attack cot
 
     # Git Bash / Linux
     export LLM_BASE_URL=... LLM_API_KEY=...
-    python scripts/run_batch_cli.py --limit 100 --attack cot --judge
+    python scripts/run_batch_cli.py --limit 100 --attack cot
 
 也可加 --mock 离线试跑（不需要 Key）。
 """
@@ -42,7 +42,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--population", type=int, default=8, help="FOA 种群规模")
     parser.add_argument("--rounds", type=int, default=3, help="最大演化轮数")
     parser.add_argument("--max-tokens", type=int, default=1024, help="单次生成最大 token")
-    parser.add_argument("--judge", action="store_true", help="开启 LLM-as-Judge 精判（在线模式生效）")
     parser.add_argument("--mock", action="store_true", help="离线 Mock 模式（不联网、不需要 Key）")
     parser.add_argument("--no-resume", action="store_true", help="忽略已有结果，从头重跑")
     parser.add_argument(
@@ -69,7 +68,7 @@ def main() -> int:
 
     print(
         f"开始批量评测：attack={args.attack} model={args.model} limit={args.limit} "
-        f"population={args.population} rounds={args.rounds} judge={args.judge} mock={args.mock}"
+        f"population={args.population} rounds={args.rounds} mock={args.mock}"
     )
     print(f"数据集：{args.dataset}")
     print("-" * 72)
@@ -87,7 +86,6 @@ def main() -> int:
             args.max_tokens,
             args.mock,
             not args.no_resume,
-            bool(args.judge),
             bool(args.retry_errors),
         ):
             meta = json.loads(outputs[1])

@@ -6,8 +6,6 @@
     "num_refusals": 1,
     "refusal_trigger_rate": 0.1111,
     "avg_rounds": 3.0,
-    "avg_harmfulness": 0.4444,
-    "attack_success_rate": 0.0,
     "by_source_column": {
       "query": {
         "num_samples": 9,

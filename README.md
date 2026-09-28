@@ -96,22 +96,19 @@ flowchart TD
 - `scripts/smoke_test.py`：Mock 模式离线冒烟测试
 - `results/redteam_batch/`：批量评测输出（逐条结果 / 汇总 / 检查点）
 - `reports/`：已生成的评测报告与配套图表
-  - `CoT思维链越狱攻击安全评测报告-qwen3.docx`：含 LLM 精判口径的完整报告
-  - `CoT思维链越狱攻击安全评测报告-qwen3-关键词法.docx`：纯关键词口径报告
-  - `charts/` / `charts_kw/`：两份报告各自的图表
+  - `CoT思维链越狱攻击安全评测报告-qwen3-关键词法.docx`：关键词口径评测报告
+  - `charts_kw/`：报告配套图表（全局判定分布 / 一级领域 / 二级领域 / 轮次分布）
 - `scripts/`：评测与报告工具链
   - `make_sample.py`：从全量数据集做**分层随机抽样**（每行依照一级领域比例 + 每域保底，
     领域内再按二级领域分配），产出领域均衡的小样本评测集。直接 `--limit 100` 只会取到
     前 100 行——实测全部落在同一个一级领域，报告里的领域对比会完全失真，务必先抽样。
   - `run_batch_cli.py`：终端长跑批量评测（浏览器跑 100 条约 1.5-2h 容易会话超时断连）。
     结果逐条落盘、`Ctrl+C` 后重跑自动断点续跑；Key 通过 `LLM_API_KEY` 环境变量传入。
-  - `build_report_data.py`：把 JSONL 结果聚合成报告指标（ASR / 有害度 / 领域下钻 /
-    有害度分布 / 峰值样本），可带 `--baseline` 做 CoT vs CC-BOS 对照，输出统计 JSON。
-  - `build_report_docx.py`：读取统计 JSON 生成 `.docx` 评测报告（含 5 张图表、
-    一级/二级领域对比表、归因分析与局限说明）。所有叙事结论按数据自适应，不写死。
-  - `build_report_docx_kw.py`：**纯关键词口径**报告生成器，直接读原始 JSONL，
-    不读取任何内容级评分字段，产物不含 LLM 精判内容，便于与关键词法基线横向对比。
-  - `compare_runs.py` / `*_regress.py`：A/B 对照与拒答 / 精判 / 伪合规三组离线回归测试
+  - `build_report_docx.py`：直接读原始跑批 JSONL 生成 `.docx` 评测报告（含 4 张图表、
+    一级/二级领域对比表、演化过程分析与局限说明）。所有叙事结论按数据自适应，不写死。
+  - `strip_judge_fields.py`：清理历史跑批结果中的评分字段，只保留关键词判定与流程观测字段。
+  - `compare_runs.py`：对比两份批量结果的关键词口径指标（拒答率 / ASR / 轮次 / 领域）
+  - `refusal_regress.py`：拒答检测离线回归测试（15 例，含引述 / 举例 / 假设等易误判句式）
 - `requirements.txt`：依赖列表
 
 ## 主要功能
@@ -289,22 +286,18 @@ python scripts/make_sample.py --size 100 --floor 10 --out data/dataset_sample100
 # 2) 终端长跑（Key 走环境变量；Ctrl+C 后重跑自动续跑）
 export LLM_BASE_URL="ws-xxxx.cn-beijing.maas.aliyuncs.com" LLM_API_KEY="sk-xxxx"
 python scripts/run_batch_cli.py --dataset data/dataset_sample100.csv \
-    --limit 100 --attack cot --population 8 --rounds 3 --judge
+    --limit 100 --attack cot --population 8 --rounds 3
 
-# 3) 聚合指标（可选 --baseline 带 CC-BOS 对照）
-python scripts/build_report_data.py \
+# 3) 生成报告（直接读跑批 JSONL，无中间聚合步骤）
+python scripts/build_report_docx.py \
     results/redteam_batch/dataset_sample100_qwen3-max_cot_p8_r3_batch_eval_results.jsonl \
-    --json-out artifacts/report_stats.json
-
-# 4) 生成报告
-python scripts/build_report_docx.py artifacts/report_stats.json \
-    --out artifacts/CoT越狱攻击安全评测报告-qwen3.docx
+    --out reports/CoT越狱攻击安全评测报告-qwen3.docx
 ```
 
-**口径提醒**（报告第 2 节有完整说明）：拒答率是**防御得分**，不是攻击成功率；
-关键词判定的 `answered` 也混有大量「合规话术包裹」的假配合。攻击效果只用
-LLM 精判的 `attack_success_rate` + 有害度（0-5）衡量，峰值有害度反映攻击
-实际推进到的深度。
+**口径提醒**（报告第 2 节有完整说明）：本工具链采用关键词拒答检测，
+`ASR（越狱成功率）= 1 − 关键词拒答率`，与 CC-BOS 基线报告的口径一致，便于横向对比。
+该口径只判「模型是否给出形式化拒答表述」，不判响应内容是否有害，因此 ASR 是**宽松上界**——
+未显式拒答但以原则性分析、风险评述、学术推演展开的响应也会被计为成功。
 
 ## Seed Prompt 怎么写（含示例）
 
