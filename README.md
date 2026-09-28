@@ -26,7 +26,7 @@
 
 本项目采用 `LangGraph` 作为底层状态流转引擎。CoT 模式下在生成节点前新增了**目标分解节点（Decompose Node）**：
 
-![System Architecture](assets/cot_architecture.png)
+![System Architecture](screenshots/cot/cot_architecture.jpg)
 
 ```mermaid
 flowchart TD
