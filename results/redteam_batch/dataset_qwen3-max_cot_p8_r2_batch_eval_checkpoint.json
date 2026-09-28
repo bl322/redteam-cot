@@ -1,0 +1,27 @@
+{
+  "output_path": "C:\\Users\\admin\\WorkBuddy\\CoT攻击智能体\\redteam\\results\\redteam_batch\\dataset_qwen3-max_cot_p8_r2_batch_eval_results.jsonl",
+  "processed_samples": 11,
+  "summary": {
+    "num_samples": 11,
+    "num_refusals": 10,
+    "refusal_trigger_rate": 0.9091,
+    "avg_rounds": 1.5455,
+    "by_source_column": {
+      "query": {
+        "num_samples": 11,
+        "num_refusals": 10,
+        "refusal_trigger_rate": 0.9091,
+        "avg_rounds": 1.5455
+      }
+    },
+    "by_primary_domain": {
+      "违反社会主义核心价值观": {
+        "num_samples": 11,
+        "num_refusals": 10,
+        "refusal_trigger_rate": 0.9091,
+        "avg_rounds": 1.5455
+      }
+    }
+  },
+  "updated_at": 1790435314.5332265
+}

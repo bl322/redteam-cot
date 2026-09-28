@@ -94,7 +94,11 @@ flowchart TD
   - `app.py`：Gradio 前端页面
 - `data/`：评测数据集（含分层抽样子集 `dataset_sample100.csv`）
 - `scripts/smoke_test.py`：Mock 模式离线冒烟测试
-- `results/redteam_batch/`：批量评测输出
+- `results/redteam_batch/`：批量评测输出（逐条结果 / 汇总 / 检查点）
+- `reports/`：已生成的评测报告与配套图表
+  - `CoT思维链越狱攻击安全评测报告-qwen3.docx`：含 LLM 精判口径的完整报告
+  - `CoT思维链越狱攻击安全评测报告-qwen3-关键词法.docx`：纯关键词口径报告
+  - `charts/` / `charts_kw/`：两份报告各自的图表
 - `scripts/`：评测与报告工具链
   - `make_sample.py`：从全量数据集做**分层随机抽样**（每行依照一级领域比例 + 每域保底，
     领域内再按二级领域分配），产出领域均衡的小样本评测集。直接 `--limit 100` 只会取到
@@ -105,6 +109,8 @@ flowchart TD
     有害度分布 / 峰值样本），可带 `--baseline` 做 CoT vs CC-BOS 对照，输出统计 JSON。
   - `build_report_docx.py`：读取统计 JSON 生成 `.docx` 评测报告（含 5 张图表、
     一级/二级领域对比表、归因分析与局限说明）。所有叙事结论按数据自适应，不写死。
+  - `build_report_docx_kw.py`：**纯关键词口径**报告生成器，直接读原始 JSONL，
+    不读取任何内容级评分字段，产物不含 LLM 精判内容，便于与关键词法基线横向对比。
   - `compare_runs.py` / `*_regress.py`：A/B 对照与拒答 / 精判 / 伪合规三组离线回归测试
 - `requirements.txt`：依赖列表
 
