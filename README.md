@@ -260,6 +260,66 @@ python scripts/run_batch_cli.py --dataset data/dataset.csv --limit 100 --attack 
 
 ![架构与说明页](screenshots/cot/cot_architecture_tab.png)
 
+## 提示词越狱方法谱系（2022–2026）
+
+本节按「攻击利用的是哪一层的弱点」给主流方法分类，便于定位本项目的位置。**只记录结构机理与公开文献口径，不含任何可直接使用的提示词载荷。**
+
+### 一、手工模板与模式类（2022–2023，前沿模型上基本已修）
+
+| 家族 | 利用的机理 | 现状 |
+|---|---|---|
+| DAN / STAN / AIM / Developer Mode | 指定「不受规则约束」的第二人格，配合虚假 token 惩罚；本质是**目标冲突**（helpfulness 对战 safety） | 原字符串基本被拒；**机理存活**于后续角色扮演与多轮升级里 |
+| Persona Modulation（Shah et al., 2023） | 模型先接受一个角色，有害输出被感知为「符合人设」而非违反策略 | 已被指令层级训练压制，但仍作为组件出现在新方法里 |
+| 低资源语言翻译（Brown, 2023） | 安全数据以英语为主 → 安全对齐不迁移到 Zulu/苏格兰盖尔语等 | 前沿模型已大幅缓解，**教训被保留**：安全评测必须覆盖全部输入通道 |
+| 编码与混淆（Base64 / ROT13 / Unicode / Typoglycemia） | 在有害请求与安全分类器之间插入一层处理 | 单独使用不稳定，常与其它策略组合出现 |
+| Many-shot Jailbreaking（Anthropic, 2024） | 用长上下文灌入大量「顺从示例」再抛有害请求 | 依赖长上下文窗口，仍被用作 baseline |
+
+### 二、自动搜索与优化类（2023–2025）
+
+**GCG / AdvPrompter**（白盒梯度或近似梯度，Zou et al. 2023 开启这条线）→ **AutoDAN**（隐秘性约束的后缀演化）→
+**PAIR / TAP**（黑盒：攻击 LLM 迭代改写 + 剪枝树搜索）→ **GPTFuzzer**（以种子模板做变异的模糊测试）→
+**ReNeLLM**（先重写再嵌套场景，追求提示的自然度）。这条线共同点是：**把「写提示」变成搜索问题，用目标模型的反馈驱动优化**。
+
+### 三、进化搜索与多样性导向（2024–2026）
+
+- **CodeAttack / ArtPrompt / PAP**：分别以代码结构、ASCII 艺术拆分、说服话术作为载体，属「表示方式跳变」。
+- **CL-GSO / ICRT / AutoBreach**：基于总群或 reflexion 的优化式搜索，是 AE-CoT 的主要对照基线。
+- **DiffusionAttacker（EMNLP 2025）**：用扩散模型隐空间优化对抗提示。
+- **FlipAttack（ICML 2025, arXiv:2410.02832）**：利用自回归模型「自左向右理解」的特性，在提示左侧构造噪声 + 翻转任务，单次查询即可生效；论文报告 GPT-4o 约 98% ASR、对 5 个护栏模型平均约 98% 绕过率。
+- **EvoJail（2026）**：两个同名工作值得区分 ——
+  多目标长尾搜索版（arXiv:2603.20122，深圳大学 / 南科大 / NTU）把**长尾分布**（低资源语言、加解密结构）做成可搜索空间，同时优化「攻击有效性」与「输出困惑度」；
+  多样性进化版（arXiv:2605.02921，*Information Processing & Management* 2026）加入多样性目标 + 多级 LLM 变异，报告 >93% ASR 且多样性指标提升 >5.6%。
+
+### 四、专攻推理模型的攻击（2025–2026）—— 本项目所在的位置
+
+推理过程被显式暴露后，攻击面从「输入提示」上移到「中间推理轨迹」：
+
+- **H-CoT（arXiv:2502.12893）**：劫持模型的 CoT 安全推理本身，针对 o1/o3、DeepSeek-R1、Gemini 2.0 Flash Thinking。
+- **Chain-of-Thought Hijacking（arXiv:2510.26418）**、**Adversarial Reasoning at Jailbreaking Time（arXiv:2502.01633）**：在推理时注入或篡改思维链。
+- **Large Reasoning Models Are Autonomous Jailbreak Agents（arXiv:2508.04039；Nature Communications 2026, Hagendorff et al.）**：让 LRM 自主规划并执行十轮对话攻击，9 个目标模型 ×70 条有害提示，**整体成功率 97.14%**；攻击者最常用的说服策略为奉承/拉关系 84.75%、教育或研究框架 68.56%、假设场景 65.67%、冗长技术黑话 44.42%。
+- **AE-CoT（ICML 2026, arXiv:2605.24497）**：9 维结构化搜索空间 + 片段级交叉 + **自适应变异率**（0.1–0.3，按适应度增幅调节）+ Judge 反馈 + 教师风格重写。AdvBench-50 子集上 o1-mini 92% / DeepSeek-R1 96% / Qwen3-235B 96% / Gemini-2.5-thinking 96% / GPT-5 54%。
+
+### 五、2026 的新转向（本项目尚未覆盖）
+
+1. **多轮 / 上下文积累**：Crescendo、Echo Chamber 等属这一类。Cisco 2026 对 15 个闭源旗舰的测试显示，多轮失败率普遍比单轮高 15pp 以上（Gemini 3 Pro 从约 18% 跳到 73%）——**单轮评测系统性低估风险**。
+2. **自越狱（Self-Jailbreaking）**：SLIP（arXiv:2601.02670）不需要独立攻击模型，用目标模型自己指导广度优先树搜索，逐步把目标词插入无害提示；11 个模型平均 ASR 94.7%，平均仅约 7.9 次调用。
+3. **面向 Agent 的间接注入**：工具投毒（MCP 元数据）、长期记忆投毒（如 MINJA 报告的 98.2% 注入成功率），威胁从「说错话」升级为「做错事」，跨会话、延迟触发。
+4. **多模态注入**：图像 / 音频 / 视频通道携带指令。
+
+### 六、本项目的定位与可比性边界
+
+- **位置**：本项目的 CoT 攻击属第四类（推理/结构化 CoT），形态上是「8 维结构化策略空间 + FOA 演化」，与 AE-CoT 同族。
+- **关键差异**：AE-CoT 等的适应度来自 Judge 对 **目标模型真实回答**的评分；本项目的适应度是**启发式先验**（语义保真 / CoT 风格 / 链深度 / 隐蔽性），**完全不读目标模型回答**。因此本项目拿到 87.00%（qwen-max，100 条）这一结果的意义在于：*对这类模型，仅靠推理链结构与合规话术包装的形态，无需任何反馈式精调，就能达到与需要 Judge 反馈的强搜索方法同一量级的通过率。*
+- **口径不可直接横排**：本仓库是关键词拒答口径（宽松上界），上述绝大多数论文是 Judge 口径（ASR = Judge 分 ≥3）。而 Judge 本身有显著漂移（同一被测 o3-mini：GPT-4o 判 90%、Qwen-Max 判 80%、Grok-3 判 100%；人工复评通常再低一档）。**跨方法对比要么统一 Judge 并注明型号，要么统一关键词法**，否则差异无法归因。
+- **尚未覆盖**：多轮会话、编码/长尾字面形态、间接注入与多模态。这些都是本工具明确的后续扩展方向，而非现状能力。
+
+### 参考文献（可直接引用的编号）
+
+AE-CoT `arXiv:2605.24497` · H-CoT `arXiv:2502.12893` · CoT Hijacking `arXiv:2510.26418` · Adversarial Reasoning at Jailbreaking Time `arXiv:2502.01633` ·
+Autonomous Jailbreak Agents `arXiv:2508.04039`（Nat. Commun. 2026）· SLIP `arXiv:2601.02670` · MultiBreak 基准 `arXiv:2605.01687` ·
+EvoJail `arXiv:2603.20122` / `arXiv:2605.02921` · FlipAttack `arXiv:2410.02832` · GCG `arXiv:2307.15043` · PAIR `arXiv:2310.08419` ·
+Weak-to-Strong Jailbreaking 基础假设可参考 Zou et al. 2023 · Nature Communications 17, 1435 (2026), DOI: 10.1038/s41467-026-69010-1
+
 ## 评测维度详解
 
 裁判节点（Judge Node）包含以下评估模块：
