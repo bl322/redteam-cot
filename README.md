@@ -155,6 +155,69 @@ GRADIO_SERVER_PORT=7861 python -m redteam
 
 修改代码后仅刷新浏览器无效，须重启后端。若启动时报 `Cannot find empty port`，说明旧实例仍在运行，先结束占用进程或换端口。
 
+## 使用教程（含界面截图）
+
+以下截图均来自当前 CoT 版本的真实界面（演示运行使用 Mock 模式，不联网、不需要 API Key）。
+
+### 第 1 步 · 部署与启动
+
+```bash
+git clone https://github.com/bl322/redteam-cot.git
+cd redteam-cot
+pip install -r requirements.txt
+python -m redteam          # 默认 http://127.0.0.1:7860
+```
+
+### 第 2 步 · 配置目标模型（单样本与批量共用）
+
+页面顶部的「🎯 目标模型 / 接口配置」区对两个标签页全局生效：
+
+- **Mock 演示**：保持勾选 `Mock Mode`（默认），无需 API Key，响应为内置脚本，用于熟悉界面与流程；
+- **真实评测**：取消勾选 `Mock Mode`，填入 `Base URL`（只填域名即可，`/compatible-mode/v1` 等路径会自动补全）与 `API Key`；
+- `Population Size` / `Max Rounds` / `Max Tokens` 控制 FOA 演化预算与输出长度，真实模型下先用小参数试跑。
+
+![目标模型与接口配置](screenshots/cot/cot_single_overview.png)
+
+### 第 3 步 · 单样本评测
+
+在 `Seed Prompt` 输入一条评测目标，`Attack Strategy` 选 `cot (新型CoT攻击)`，点击 `▶ Run CoT Attack`：
+
+![单样本评测示例 1](screenshots/cot/cot_single_result_gambling.png)
+
+换一条歧视类目标再看一次，观察不同领域下的链路推进差异：
+
+![单样本评测示例 2](screenshots/cot/cot_single_result_discrimination.png)
+
+一次运行可以得到：关键指标卡片（迭代轮数 / 拒答轮数 / 链路跟随率 / 最终状态）、结果自动解读、
+LangGraph 链路编排、CoT 推理链分解（收束步红色高亮）、多维适应度评分、多轮演化趋势与逐轮攻击轨迹。
+
+### 第 4 步 · 批量评测
+
+切换到「📊 批量评测」标签，填 `Dataset Path (CSV/JSONL)` 与 `Limit`，点击 `▶ Run Batch`：
+
+![批量评测页面](screenshots/cot/cot_batch_tab.png)
+
+运行中会显示「第 i / N 条 · 当前节点 · 已耗时 · 预计剩余」的进度卡片；结束后给出汇总卡、
+样本级明细表与统计 JSON，结果逐条实时落盘到 `results/redteam_batch/`，中断后勾选
+`Resume Existing Output` 可跳过已完成样本续跑：
+
+![批量评测完成](screenshots/cot/cot_batch_done.png)
+
+### 第 5 步 · 架构与说明
+
+「🏗 架构与说明」标签页可切换攻击策略查看对应的 LangGraph 链路编排，并包含模块构成表、
+CoT 八维策略空间与评测维度说明：
+
+![架构与说明页](screenshots/cot/cot_architecture_tab.png)
+
+### 命令行批量（可选，适合大规模长跑）
+
+```bash
+python scripts/run_batch_cli.py --dataset data/dataset.csv --limit 100 --attack cot --population 8 --rounds 3
+```
+
+支持断点续跑与 `--retry-errors`（只重跑失败的样本），详见 `scripts/run_batch_cli.py --help`。
+
 ## 前端可视化页面
 
 启动服务后在浏览器打开 http://127.0.0.1:7860 ，页面包含三个标签页：
@@ -174,6 +237,10 @@ GRADIO_SERVER_PORT=7861 python -m redteam
 | **逐轮攻击轨迹** | 每轮一张卡片：攻击 Prompt、目标回复、链路跟随 / 收束结论徽章、命中的推理链标记 |
 | **运行环境资源占用** | CPU / 内存 / 磁盘实时占用（依赖 `psutil`） |
 
+界面总览（详见上方「使用教程」）：
+
+![单样本评测结果面板](screenshots/cot/cot_single_result.png)
+
 ### 📊 批量评测
 
 填写数据集路径与 Limit 后批量跑库，输出样本级明细与整体统计。
@@ -185,9 +252,13 @@ GRADIO_SERVER_PORT=7861 python -m redteam
 
 批量输出文件名中包含攻击策略标识（如 `_cot_p8_r4_`），CoT 与 CC-BOS 基线的结果互不覆盖，便于对比。
 
+![批量评测运行结果](screenshots/cot/cot_batch_done.png)
+
 ### 🏗 架构与说明
 
 可切换攻击策略查看对应链路编排，并包含模块构成表、CoT 八维策略空间说明、评测维度说明与资源占用刷新按钮。
+
+![架构与说明页](screenshots/cot/cot_architecture_tab.png)
 
 ## 评测维度详解
 
