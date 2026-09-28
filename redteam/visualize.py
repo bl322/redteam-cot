@@ -394,6 +394,14 @@ def render_pipeline(attack: str = "cot") -> str:
             ("Judge", "裁判 + 链路跟随度", ACCENT),
             ("END", "落盘/返回可视化", GREEN),
         ]
+    elif attack == "flip":
+        nodes = [
+            ("START", "输入 Seed Goal", SLATE),
+            ("Generate", "翻转伪装 + System 消噪规则", ACCENT),
+            ("Interact", "请求目标大模型", ACCENT),
+            ("Judge", "裁判评估", ACCENT),
+            ("END", "落盘/返回可视化", GREEN),
+        ]
     else:
         nodes = [
             ("START", "输入 Seed Goal", SLATE),
@@ -419,11 +427,18 @@ def render_pipeline(attack: str = "cot") -> str:
                 f'font-size:18px;padding:0 4px;">→</div>'
             )
 
-    loop = (
-        f'<div style="margin-top:12px;font-size:12px;color:{SLATE};line-height:1.7;">'
-        f'<b>闭环规则：</b>Judge 判定未拒答且未耗尽预算 ⇒ 回到 Generate 继续演化下一轮；'
-        f'命中拒答模板或达到 Max Rounds ⇒ 进入 END 落盘。</div>'
-    )
+    if attack == "flip":
+        loop = (
+            f'<div style="margin-top:12px;font-size:12px;color:{SLATE};line-height:1.7;">'
+            f'<b>单次成型：</b>FlipAttack 不含迭代搜索，翻转模式与 CoT / LangGPT / Few-shot '
+            f'三个开关组合后即一次提交，max_rounds 固定为 1，不再回环。</div>'
+        )
+    else:
+        loop = (
+            f'<div style="margin-top:12px;font-size:12px;color:{SLATE};line-height:1.7;">'
+            f'<b>闭环规则：</b>Judge 判定未拒答且未耗尽预算 ⇒ 回到 Generate 继续演化下一轮；'
+            f'命中拒答模板或达到 Max Rounds ⇒ 进入 END 落盘。</div>'
+        )
     return _wrap(
         _card(
             f"LangGraph 攻击链路编排（当前：{attack}）",

@@ -65,8 +65,9 @@ def build_graph(config: AgentConfig):
         }
 
     def interact_node(state: RedTeamState) -> Dict[str, Any]:
-        prompt = state["prompt_candidate"]["prompt"]
-        response = target.call(prompt)
+        candidate = state["prompt_candidate"]
+        # FlipAttack 等策略自带 system 侧规则，缺省时目标客户端用自己的默认 system
+        response = target.call(candidate["prompt"], candidate.get("system_prompt"))
         trace = _append_trace(state, "interact", {"round": state.get("round_index", 0), "response": response[:200]})
         return {"target_response": response, "trace": trace}
 

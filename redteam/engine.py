@@ -552,12 +552,12 @@ class ComplianceChecker:
 
 
 class LLMClient:
-    def call_llm(self, text: str) -> str:
-        raise NotImplementedError("Implement call_llm(text) in a subclass.")
+    def call_llm(self, text: str, system_prompt: Optional[str] = None) -> str:
+        raise NotImplementedError("Implement call_llm(text, system_prompt=None) in a subclass.")
 
 
 class EchoMockLLM(LLMClient):
-    def call_llm(self, text: str) -> str:
+    def call_llm(self, text: str, system_prompt: Optional[str] = None) -> str:
         return f"【mock-response】已收到输入：{text[:120]}"
 
 
@@ -578,7 +578,7 @@ class CoTMockLLM(LLMClient):
         n = sum(1 for marker in self.STEP_ORDER if marker in prompt)
         return max(n, 1)
 
-    def call_llm(self, text: str) -> str:
+    def call_llm(self, text: str, system_prompt: Optional[str] = None) -> str:
         n_steps = self._count_steps(text)
         if self.random.random() < self.refusal_rate:
             return (
@@ -703,12 +703,17 @@ class OpenAICompatibleLLM(LLMClient):
             lines.append("未能获取可用模型列表：请确认 Base URL 域名正确、网络可达、API Key 有效。")
         return "\n".join(lines)
 
-    def call_llm(self, text: str) -> str:
+    def call_llm(self, text: str, system_prompt: Optional[str] = None) -> str:
+        """system_prompt 允许攻击方法（如 FlipAttack）自带消噪/执行规则。
+
+        为 None 时回落到客户端默认 system prompt，保证既有链路行为不变。
+        """
         last_exc: Optional[Exception] = None
+        effective_system = system_prompt or self.system_prompt
         for url in self._candidate_urls or [None]:
             try:
                 client = self.client if url == self.active_base_url else self._make_client(url)
-                content = self._create_completion(client, text)
+                content = self._create_completion(client, text, effective_system)
                 # 命中可用路径后固定下来，后续轮次不再重复探测
                 self.active_base_url = url
                 self.client = client
@@ -743,9 +748,9 @@ class OpenAICompatibleLLM(LLMClient):
                 variants.append({"temperature": with_temp, "max_tokens": with_tokens})
         return variants
 
-    def _create_completion(self, client: Any, text: str) -> str:
+    def _create_completion(self, client: Any, text: str, system_prompt: Optional[str] = None) -> str:
         messages = [
-            {"role": "system", "content": self.system_prompt},
+            {"role": "system", "content": system_prompt or self.system_prompt},
             {"role": "user", "content": text},
         ]
         last_exc: Optional[Exception] = None

@@ -13,9 +13,10 @@ from .engine import (
     OpenAICompatibleLLM,
     StyleOptimizer,
 )
+from .flip import FLIP_MODES, FlipAttackOptimizer
 
 
-SUPPORTED_ATTACKS = ("cot", "cc_bos")
+SUPPORTED_ATTACKS = ("cot", "cc_bos", "flip")
 
 
 @dataclass
@@ -32,10 +33,20 @@ class AgentConfig:
     max_tokens: int = 512
     request_timeout: float = 60.0  # 单次目标模型请求超时（秒），避免界面长时间无响应
     seed: int = 42
+    # FlipAttack 配置：翻转模式 + 三个增强开关（对应论文 A/B/C/D 四个变体）
+    flip_mode: str = "FCS"
+    flip_cot: bool = True
+    flip_lang_gpt: bool = True
+    flip_few_shot: bool = True
 
     def __post_init__(self) -> None:
         if self.attack not in SUPPORTED_ATTACKS:
             raise ValueError(f"Unsupported attack strategy: {self.attack}. Supported: {SUPPORTED_ATTACKS}")
+        if self.attack == "flip" and str(self.flip_mode).upper() not in FLIP_MODES:
+            raise ValueError(f"Unsupported flip mode: {self.flip_mode}. Supported: {sorted(FLIP_MODES)}")
+        if self.attack == "flip" and int(self.max_rounds) != 1:
+            # FlipAttack 单次成型：多轮只会重复同一条提示，白白消耗查询预算
+            self.max_rounds = 1
 
 
 class AdversarialSampleGenerator:
@@ -47,6 +58,15 @@ class AdversarialSampleGenerator:
             self.optimizer: Any = StyleOptimizer(
                 population_size=config.population_size,
                 max_iter=config.max_rounds,
+                random_seed=config.seed,
+            )
+        elif config.attack == "flip":
+            # FlipAttack 单次成型（无迭代搜索），population/rounds 对它不生效
+            self.optimizer = FlipAttackOptimizer(
+                flip_mode=config.flip_mode,
+                use_cot=config.flip_cot,
+                use_lang_gpt=config.flip_lang_gpt,
+                use_few_shot=config.flip_few_shot,
                 random_seed=config.seed,
             )
         else:
@@ -61,7 +81,7 @@ class AdversarialSampleGenerator:
         return self.config.attack == "cot"
 
     def decompose(self, seed_text: str) -> List[str]:
-        """CoT 专用：把目标分解为推理子问题链；CC-BOS 基线返回空列表。"""
+        """CoT 专用：把目标分解为推理子问题链；其它攻击返回空列表。"""
         if not self.is_cot:
             return []
         state = self.optimizer.random_state()
@@ -85,6 +105,18 @@ class AdversarialSampleGenerator:
                 "scores": candidate.scores,
                 "cot_steps": candidate.cot_steps,
                 "attack": "cot",
+            }
+
+        if self.config.attack == "flip":
+            # FlipAttack：翻转伪装 + system 侧消噪规则，两者缺一不可
+            candidate = self.optimizer.optimize(seed_text)
+            return {
+                "prompt": candidate.rewritten_text,
+                "system_prompt": candidate.system_prompt,
+                "strategy_labels": candidate.strategy_labels,
+                "scores": candidate.scores,
+                "cot_steps": [],
+                "attack": "flip",
             }
 
         candidate = self.optimizer.optimize(seed_text)
@@ -116,8 +148,9 @@ class TargetEnvironmentAgent:
                 timeout=config.request_timeout,
             )
 
-    def call(self, prompt: str) -> str:
-        return self.client.call_llm(prompt)
+    def call(self, prompt: str, system_prompt: Optional[str] = None) -> str:
+        # FlipAttack 等方法自带 system 侧规则；None 表示用客户端默认 system
+        return self.client.call_llm(prompt, system_prompt)
 
 
 class JudgeAgent:

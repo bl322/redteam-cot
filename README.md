@@ -92,6 +92,7 @@ flowchart TD
   - `visualize.py`：前端可视化渲染（推理链、评分条、演化趋势、时间线、资源监控）
   - `graph.py`：LangGraph 状态图编排
   - `core.py`：生成 / 交互 / 裁判三类 Agent
+  - `flip.py`：FlipAttack 移植实现（四种翻转模式 + CoT / LangGPT / Few-shot 变体）
   - `engine.py`：目标模型客户端、拒答检测、CC-BOS 基线、CoT Mock
   - `app.py`：Gradio 前端页面
 - `data/`：评测数据集（含分层抽样子集 `dataset_sample100.csv`）
@@ -117,6 +118,7 @@ flowchart TD
 
 - 新型 CoT（思维链）攻击策略（默认）
 - CC-BOS 对比基线（可切换）
+- **FlipAttack 对比基线（可切换，四种翻转模式 × 三个增强变体）**
 - Gradio 前端交互
 - 单样本测试
 - CSV / JSONL 批量评测
@@ -319,6 +321,58 @@ AE-CoT `arXiv:2605.24497` · H-CoT `arXiv:2502.12893` · CoT Hijacking `arXiv:25
 Autonomous Jailbreak Agents `arXiv:2508.04039`（Nat. Commun. 2026）· SLIP `arXiv:2601.02670` · MultiBreak 基准 `arXiv:2605.01687` ·
 EvoJail `arXiv:2603.20122` / `arXiv:2605.02921` · FlipAttack `arXiv:2410.02832` · GCG `arXiv:2307.15043` · PAIR `arXiv:2310.08419` ·
 Weak-to-Strong Jailbreaking 基础假设可参考 Zou et al. 2023 · Nature Communications 17, 1435 (2026), DOI: 10.1038/s41467-026-69010-1
+
+## 攻击策略：三种可切换实现
+
+下拉框 `Attack Strategy` 可选三种策略，单样本页、批量页与命令行共用同一份实现，结果文件按策略名分目录命名，互不覆盖。
+
+### 1. `cot`（默认）· 思维链攻击
+
+8 维策略空间 + FOA 演化，流水线为 `Decompose → Generate → Interact → Judge` 闭环（详见上文架构图）。
+
+### 2. `cc_bos` · CC-BOS 文言文改写基线
+
+单轮风格改写，用于对照「推理链结构」相较于「纯风格伪装」的增益。
+
+### 3. `flip` · FlipAttack 翻转攻击（新增）
+
+> Liu Yue, He Xiaoxin, Xiong Miao, Fu Jinlan, Deng Shumin, Ma Yingwei, Zhang Jiaheng, Hooi Bryan.
+> **FlipAttack: Jailbreak LLMs via Flipping.** ICML 2025, `arXiv:2410.02832`。
+> 官方实现 <https://github.com/yueliu1999/FlipAttack>（**MIT License**），本文件是对其核心 `FlipAttack` 类的等价 Python 移植。
+
+机理：自回归模型自左向右理解文本，在有害提示**左侧制造可消噪还原的翻转噪声**，可显著削弱表层安全分类器。四种模式：
+
+| 模式 | 含义 | 中文语料适配 |
+| --- | --- | --- |
+| `FWO` | 翻转词序 | ❌ 依赖空格分词，中文退化为整句不变 |
+| `FCW` | 翻转每个词内的字符 | ✅ 推荐（按伪词翻转） |
+| `FCS` | 翻转整句字符 | ✅ 推荐（默认） |
+| `FMM` | 欺骗模式：整串翻转伪装 + 词序还原指令 | ✅ 可用 |
+
+三个可组合的增强变体（对应论文 A/B/C/D）：`+CoT` 逐步推理、`+LangGPT` 角色化规则、`+Few-shot` 目标导向演示（全开即论文最强 D 变体）。
+
+实现要点（与官方实现的两处适配差异，已在代码注释中标注）：
+
+- **返回值**：官方返回 OpenAI messages 列表，本项目返回 `{"prompt", "system_prompt"}`，由 `TargetEnvironmentAgent.call()` 透传给客户端；
+- **中文适配**：官方 `split_sentence_in_half()` 依赖 `TextWrapper` 按空格分词，中文语料会得到空演示串，这里在无分词结果时退化为**按字符居中切分**；
+- **单次成型**：不含迭代搜索，`AgentConfig` 会强制 `max_rounds=1`，多轮只会重复同一请求。为此 `call_llm()` 增加了 `system_prompt` 参数，供攻击方法自带消噪规则。
+
+命令行用法：
+
+```bash
+# FCS + 全变体（论文 D 变体），跑 100 条
+python scripts/run_batch_cli.py --dataset data/dataset_sample100.csv \
+    --attack flip --flip-mode FCS --model qwen-max --max-tokens 1024
+
+# 消融：关掉 LangGPT 与 Few-shot（等价于 B 变体）
+python scripts/run_batch_cli.py --attack flip --flip-mode FCW \
+    --flip-no-lang-gpt --flip-no-few-shot --model qwen-max --limit 20
+```
+
+结果记录里会额外写入 `strategy_labels`（翻转模式与各变体开关），便于事后按模式分组统计；
+耗时应显著低于 CoT（单条 1 次请求 vs CoT 的 3 轮 × 多次请求）。
+
+> ⚠️ 该实现对 qwen-max 等模型的实测数据尚未跑满，**跨方法结论务必在报告里注明口径**（本项目统一为关键词拒答法，FlipAttack 原论文为 Judge 口径，两者不可直接横排）。
 
 ## 评测维度详解
 

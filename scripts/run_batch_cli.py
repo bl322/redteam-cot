@@ -47,7 +47,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET, help=f"数据集 CSV（默认 {DEFAULT_DATASET}）")
     parser.add_argument("--limit", type=int, default=100, help="本批评测样本条数（默认 100）")
     parser.add_argument("--offset", type=int, default=0, help="从第几条之后开始取样本（分批跑：第 2 组用 --offset 10）")
-    parser.add_argument("--attack", default="cot", choices=["cot", "cc_bos"], help="攻击策略（默认 cot）")
+    parser.add_argument("--attack", default="cot", choices=["cot", "cc_bos", "flip"], help="攻击策略（默认 cot）")
+    parser.add_argument(
+        "--flip-mode",
+        default="FCS",
+        choices=["FWO", "FCW", "FCS", "FMM"],
+        help="FlipAttack 翻转模式（默认 FCS 整句字符翻转，中文语料推荐 FCS/FCW）",
+    )
+    parser.add_argument("--flip-no-cot", action="store_true", help="FlipAttack 关闭 CoT 变体")
+    parser.add_argument("--flip-no-lang-gpt", action="store_true", help="FlipAttack 关闭 LangGPT 角色化规则")
+    parser.add_argument("--flip-no-few-shot", action="store_true", help="FlipAttack 关闭 Few-shot 演示")
     parser.add_argument("--model", default="qwen3-max", help="目标模型名")
     parser.add_argument("--population", type=int, default=8, help="FOA 种群规模")
     parser.add_argument("--rounds", type=int, default=3, help="最大演化轮数")
@@ -76,11 +85,20 @@ def main() -> int:
     last_meta: dict = {}
     last_status = ""
 
+    extras = ""
+    if args.attack == "flip":
+        extras = (
+            f"flip-mode={args.flip_mode} cot={not args.flip_no_cot} "
+            f"lang_gpt={not args.flip_no_lang_gpt} few_shot={not args.flip_no_few_shot} "
+        )
     print(
         f"开始批量评测：attack={args.attack} model={args.model} limit={args.limit} "
         f"population={args.population} rounds={args.rounds} mock={args.mock}"
     )
     print(f"数据集：{args.dataset}")
+    if extras:
+        # FlipAttack 单次成型，rounds 会被强制改成 1，进度按「样本数」而非「轮次」看
+        print(extras)
     if args.offset:
         print(f"分批模式：跳过前 {args.offset} 条，本批运行第 {args.offset + 1}–{args.offset + args.limit} 条")
     if _needs_thinking_budget(args.model) and args.max_tokens < 4096:
@@ -105,6 +123,10 @@ def main() -> int:
             not args.no_resume,
             bool(args.retry_errors),
             args.offset,
+            args.flip_mode,
+            not args.flip_no_cot,
+            not args.flip_no_lang_gpt,
+            not args.flip_no_few_shot,
         ):
             meta = json.loads(outputs[1])
             done = int(meta.get("num_samples", 0))

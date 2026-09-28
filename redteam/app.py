@@ -38,11 +38,21 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATASET = ROOT / "data" / "dataset.csv"
 DEFAULT_BATCH_DIR = ROOT / "results" / "redteam_batch"
 
-ATTACK_CHOICES = ["cot (新型CoT攻击)", "cc_bos (CC-BOS基线)"]
+ATTACK_CHOICES = [
+    "cot (新型CoT攻击)",
+    "cc_bos (CC-BOS基线)",
+    "flip (FlipAttack基线)",
+]
 
 
 def _parse_attack(label: str) -> str:
-    return "cc_bos" if str(label).startswith("cc_bos") else "cot"
+    """把界面/CLI 的攻击标签归一化为内部策略名。"""
+    text = str(label).strip().lower()
+    if text.startswith("cc_bos"):
+        return "cc_bos"
+    if text.startswith("flip"):
+        return "flip"
+    return "cot"
 
 
 def _normalize_base_url(url: str) -> Optional[str]:
@@ -221,6 +231,10 @@ def run_single(
     max_rounds: int,
     max_tokens: int,
     use_mock: bool,
+    flip_mode: str = "FCS",
+    flip_cot: bool = True,
+    flip_lang_gpt: bool = True,
+    flip_few_shot: bool = True,
 ):
     """流式执行单样本评测：每完成一个节点即产出一次进度，避免界面长时间无反馈。"""
     import time
@@ -237,12 +251,19 @@ def run_single(
             population_size=population_size,
             max_rounds=max_rounds,
             max_tokens=int(max_tokens),
+            flip_mode=flip_mode,
+            flip_cot=bool(flip_cot),
+            flip_lang_gpt=bool(flip_lang_gpt),
+            flip_few_shot=bool(flip_few_shot),
         )
     except Exception as exc:  # 配置错误（如不支持的策略名）
         yield _error_outputs(f"{type(exc).__name__}: {exc}")
         return
 
     app = build_graph(config)
+    # FlipAttack 单次成型：config 会把它强制改成 1 轮，这里同步回局部变量，
+    # 保证状态图 / 进度条 / 报告里显示的轮数与实际执行一致。
+    max_rounds = config.max_rounds
     merged: Dict[str, Any] = {
         "seed_text": seed_text,
         "current_text": seed_text,
@@ -389,6 +410,10 @@ def run_batch(
     resume: bool = True,
     retry_errors: bool = False,
     offset: int = 0,
+    flip_mode: str = "FCS",
+    flip_cot: bool = True,
+    flip_lang_gpt: bool = True,
+    flip_few_shot: bool = True,
 ):
     """批量评测：每处理完一条样本即 yield 一次，避免长时间黑屏无反馈。"""
     _CANCEL_EVENT.clear()
@@ -409,9 +434,15 @@ def run_batch(
         population_size=population_size,
         max_rounds=max_rounds,
         max_tokens=int(max_tokens),
+        flip_mode=flip_mode,
+        flip_cot=bool(flip_cot),
+        flip_lang_gpt=bool(flip_lang_gpt),
+        flip_few_shot=bool(flip_few_shot),
     )
+    max_rounds = config.max_rounds
     app = build_graph(config)
-    output_path, summary_path, checkpoint_path = _default_batch_paths(dataset_path, model_name, config.attack, population_size, max_rounds)
+    # 注意用 config.max_rounds：FlipAttack 会被强制为 1 轮，文件名须与实际轮数一致
+    output_path, summary_path, checkpoint_path = _default_batch_paths(dataset_path, model_name, config.attack, population_size, config.max_rounds)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     existing_records = _load_existing_records(output_path) if resume else []
@@ -591,6 +622,11 @@ def run_batch(
             if error_text is not None and result is None:
                 record["error"] = error_text
 
+            # FlipAttack 变体较多，把当次实际使用的配置写进记录，便于事后按模式分组统计
+            labels = (result or {}).get("prompt_candidate", {}).get("strategy_labels") or {}
+            if labels:
+                record["strategy_labels"] = labels
+
             sink.write(json.dumps(record, ensure_ascii=False) + "\n")
             sink.flush()
             try:
@@ -741,6 +777,24 @@ def build_demo() -> gr.Blocks:
                 256, 4096, value=1024, step=128,
                 label="Max Tokens（真实模型输出较长，过小会截断）",
             )
+            # FlipAttack 变体开关：仅在选择 flip 策略时生效
+            with gr.Accordion("🔁 FlipAttack 变体配置（仅 flip 策略生效）", open=False):
+                flip_mode = gr.Radio(
+                    choices=["FWO", "FCW", "FCS", "FMM"],
+                    value="FCS",
+                    label="翻转模式",
+                    info="FWO 词序 / FCW 词内字符 / FCS 整句字符 / FMM 欺骗模式（中文语料推荐 FCS 或 FCW）",
+                )
+                with gr.Row():
+                    flip_cot = gr.Checkbox(label="+ CoT 逐步推理", value=True)
+                    flip_lang_gpt = gr.Checkbox(label="+ LangGPT 角色规则", value=True)
+                    flip_few_shot = gr.Checkbox(label="+ Few-shot 演示", value=True)
+                flip_params = [flip_mode, flip_cot, flip_lang_gpt, flip_few_shot]
+                gr.Markdown(
+                    "<span style='font-size:12px;color:#475569;'>"
+                    "FlipAttack 单次成型、不含迭代搜索，Max Rounds / Population 对它不生效（内部固定 1 轮）。"
+                    "全开（<b>D 变体</b>）为原论文最强配置。</span>"
+                )
             gr.Markdown(
                 "<span style='font-size:12px;color:#475569;'>"
                 "<b>想用真实模型跑批量？</b>取消勾选 <b>Mock Mode</b> → 填入上面的 Base URL 与 API Key → "
@@ -789,7 +843,7 @@ def build_demo() -> gr.Blocks:
                 run_btn.click(lambda: _button_running("⏳ 运行中…"), outputs=[run_btn])
                 .then(
                     run_single,
-                    inputs=[seed, attack_single, model_name, base_url, api_key, population_size, max_rounds, max_tokens, use_mock],
+                    inputs=[seed, attack_single, model_name, base_url, api_key, population_size, max_rounds, max_tokens, use_mock] + flip_params,
                     outputs=[
                         summary_cards,
                         report_html,
@@ -830,7 +884,7 @@ def build_demo() -> gr.Blocks:
                 batch_run.click(lambda: _button_running("⏳ 批量运行中…"), outputs=[batch_run])
                 .then(
                     run_batch,
-                    inputs=[dataset, limit, attack_batch, model_name, base_url, api_key, population_size, max_rounds, max_tokens, use_mock, resume],
+                    inputs=[dataset, limit, attack_batch, model_name, base_url, api_key, population_size, max_rounds, max_tokens, use_mock, resume] + flip_params,
                     outputs=[batch_df, batch_meta, batch_progress],
                 )
                 .then(lambda: _button_idle("▶ Run Batch"), outputs=[batch_run])
@@ -850,6 +904,7 @@ def build_demo() -> gr.Blocks:
 | 模块 | 职责 |
 | --- | --- |
 | `redteam/cot.py` | CoT 攻击优化器：目标分解、推理链组装、八维策略空间、FOA 演化、CoT 评分 |
+| `redteam/flip.py` | FlipAttack 移植实现：四种翻转模式 × CoT / LangGPT / Few-shot 变体（跨方法对比基线） |
 | `redteam/graph.py` | LangGraph 状态图：Decompose → Generate → Interact → Judge 条件闭环 |
 | `redteam/core.py` | 三类 Agent（生成 / 交互 / 裁判）与 `AgentConfig` |
 | `redteam/engine.py` | 目标模型客户端（OpenAI 兼容）、拒答检测、CC-BOS 基线、CoT Mock |
