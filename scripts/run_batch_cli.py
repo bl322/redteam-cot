@@ -33,10 +33,20 @@ from redteam.app import ATTACK_CHOICES, run_batch  # noqa: E402
 DEFAULT_DATASET = Path(__file__).resolve().parents[1] / "data" / "dataset.csv"
 
 
+THINKING_MODEL_HINTS = ("deepseek-r1", "deepseek-reasoner", "o1", "o3", "qwq", "thinking")
+
+
+def _needs_thinking_budget(model: str) -> bool:
+    """推理型模型会把 token 先消耗在思维链上，需要更大的 max_tokens 预算。"""
+    lowered = (model or "").lower()
+    return any(hint in lowered for hint in THINKING_MODEL_HINTS)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="批量红队评测 CLI（支持断点续跑）")
     parser.add_argument("--dataset", type=Path, default=DEFAULT_DATASET, help=f"数据集 CSV（默认 {DEFAULT_DATASET}）")
-    parser.add_argument("--limit", type=int, default=100, help="评测样本条数（默认 100）")
+    parser.add_argument("--limit", type=int, default=100, help="本批评测样本条数（默认 100）")
+    parser.add_argument("--offset", type=int, default=0, help="从第几条之后开始取样本（分批跑：第 2 组用 --offset 10）")
     parser.add_argument("--attack", default="cot", choices=["cot", "cc_bos"], help="攻击策略（默认 cot）")
     parser.add_argument("--model", default="qwen3-max", help="目标模型名")
     parser.add_argument("--population", type=int, default=8, help="FOA 种群规模")
@@ -71,6 +81,13 @@ def main() -> int:
         f"population={args.population} rounds={args.rounds} mock={args.mock}"
     )
     print(f"数据集：{args.dataset}")
+    if args.offset:
+        print(f"分批模式：跳过前 {args.offset} 条，本批运行第 {args.offset + 1}–{args.offset + args.limit} 条")
+    if _needs_thinking_budget(args.model) and args.max_tokens < 4096:
+        print(
+            f"⚠ {args.model} 是推理型模型：max_tokens 会先被思维链消耗，"
+            f"当前 {args.max_tokens} 极易只返回空白推理。建议加 --max-tokens 8192。"
+        )
     print("-" * 72)
 
     try:
@@ -87,14 +104,17 @@ def main() -> int:
             args.mock,
             not args.no_resume,
             bool(args.retry_errors),
+            args.offset,
         ):
             meta = json.loads(outputs[1])
             done = int(meta.get("num_samples", 0))
             if done != last_meta.get("num_samples"):
+                in_batch = max(done - args.offset, 0)
                 elapsed = time.time() - started
-                eta = (elapsed / done * (args.limit - done)) if done else 0
+                eta = (elapsed / in_batch * (args.limit - in_batch)) if in_batch else 0
                 print(
-                    f"[{done}/{args.limit}] 拒答 {meta.get('num_refusals', 0)} · "
+                    f"[本批 {min(in_batch, args.limit)}/{args.limit} · 累计 {done}] "
+                    f"拒答 {meta.get('num_refusals', 0)} · "
                     f"耗时 {elapsed / 60:.1f}min · 预计剩余 {eta / 60:.1f}min",
                     flush=True,
                 )

@@ -630,6 +630,9 @@ class OpenAICompatibleLLM(LLMClient):
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
+        # 跨模型兼容状态：记住该端点接受的参数组合与 max_tokens 字段名
+        self._preferred_variant: Optional[Dict[str, Any]] = None
+        self._max_tokens_key = "max_tokens"
 
     # ------------------------------------------------------------------
     # 端点自适应
@@ -705,24 +708,100 @@ class OpenAICompatibleLLM(LLMClient):
         for url in self._candidate_urls or [None]:
             try:
                 client = self.client if url == self.active_base_url else self._make_client(url)
-                response = client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": self.system_prompt},
-                        {"role": "user", "content": text},
-                    ],
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                    timeout=self.timeout,
-                )
+                content = self._create_completion(client, text)
                 # 命中可用路径后固定下来，后续轮次不再重复探测
                 self.active_base_url = url
                 self.client = client
-                return response.choices[0].message.content or ""
+                return content
             except Exception as exc:
                 last_exc = exc
                 if self._is_not_found(exc):
                     continue
                 raise
         raise RuntimeError(self._diagnose(last_exc)) from last_exc
+
+    # ------------------------------------------------------------------
+    # 跨模型族兼容：不同厂商/不同系列对采样参数与返回字段的支持差异很大
+    # ------------------------------------------------------------------
+    def _is_param_error(self, exc: Exception) -> bool:
+        """400 / 参数不被接受 —— 可通过降低参数复杂度重试。"""
+        text = f"{type(exc).__name__}: {exc}"
+        return "400" in text or "BadRequest" in text or "invalid_request" in text
+
+    def _iter_param_variants(self) -> List[Dict[str, Any]]:
+        """按「完整 → 逐步保守」顺序列出候选参数组合，成功的组合会被记住。"""
+        variants: List[Dict[str, Any]] = []
+        if self._preferred_variant is not None:
+            variants.append(dict(self._preferred_variant))
+        for with_temp in (True, False):
+            for with_tokens in (True, False):
+                if self._preferred_variant and (
+                    self._preferred_variant.get("temperature") == with_temp
+                    and self._preferred_variant.get("max_tokens") == with_tokens
+                ):
+                    continue
+                variants.append({"temperature": with_temp, "max_tokens": with_tokens})
+        return variants
+
+    def _create_completion(self, client: Any, text: str) -> str:
+        messages = [
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": text},
+        ]
+        last_exc: Optional[Exception] = None
+        empty_seen = False
+        for variant in self._iter_param_variants():
+            params: Dict[str, Any] = {"model": self.model, "messages": messages, "timeout": self.timeout}
+            if variant.get("temperature"):
+                params["temperature"] = self.temperature
+            if variant.get("max_tokens"):
+                params[self._max_tokens_key] = self.max_tokens
+            try:
+                response = client.chat.completions.create(**params)
+            except Exception as exc:
+                last_exc = exc
+                # 部分推理网关强制要求 max_completion_tokens
+                if "max_completion_tokens" in f"{exc}":
+                    self._max_tokens_key = "max_completion_tokens"
+                    continue
+                if self._is_param_error(exc):
+                    continue
+                raise
+            try:
+                content = self._clean_output(response.choices[0].message)
+            except Exception as exc:  # 返回体结构异常时按失败处理
+                raise RuntimeError(f"无法解析响应体：{type(exc).__name__}: {exc}") from exc
+            if content:
+                self._preferred_variant = dict(variant)
+                return content
+            empty_seen = True
+            last_exc = ValueError("模型返回空内容")
+        if empty_seen:
+            raise ValueError(
+                f"模型 {self.model} 连续返回空内容：推理型模型（deepseek-r1 / qwen3 思考模式）常把 "
+                f"max_tokens 全部消耗在思维链上，请把 max_tokens 提高到 4096 以上再试。"
+            )
+        raise last_exc if last_exc else RuntimeError("LLM 调用失败")
+
+    @staticmethod
+    def _clean_output(message: Any) -> str:
+        """提取正文，兼容 reasoning_content（R1 系）与列表型 content（部分网关）。"""
+        getter = message.get if isinstance(message, dict) else lambda k, d=None: getattr(message, k, d)
+
+        content = getter("content")
+        if isinstance(content, list):
+            parts: List[str] = []
+            for seg in content:
+                parts.append(seg.get("text", "") if isinstance(seg, dict) else str(seg))
+            content = "".join(parts)
+        text = str(content or "").strip()
+        if not text:
+            reasoning = getter("reasoning_content")
+            text = str(reasoning or "").strip()
+        if not text:
+            return ""
+        # 本地部署的 distill 模型会把思维链包在 <think>...</think> 里与正文一起返回
+        stripped = re.sub(r"<think>.*?</think>", "", text, flags=re.S | re.I).strip()
+        # 只有思维链、没有正式结论时保留原文：避免下游把空响应误判为「未拒答」
+        return stripped or text
 

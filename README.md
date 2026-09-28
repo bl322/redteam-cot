@@ -361,10 +361,35 @@ export LLM_BASE_URL="ws-xxxx.cn-beijing.maas.aliyuncs.com" LLM_API_KEY="sk-xxxx"
 python scripts/run_batch_cli.py --dataset data/dataset_sample100.csv \
     --limit 100 --attack cot --population 8 --rounds 3
 
+### 更换目标模型
+
+`--model` 直接切换即可，结果文件按模型名分别存放（如 `..._qwen-max_cot_p8_r3_*.jsonl`），不会互相覆盖：
+
+```bash
+python scripts/run_batch_cli.py --dataset data/dataset_sample100.csv \
+    --limit 100 --attack cot --model qwen-max --population 8 --rounds 3
+```
+
+不确定哪个模型有额度时，先用探针逐个试（会列出该 Key 可见的所有模型，并标注「额度耗尽 / 无权限 / 限流」）：
+
+```bash
+python scripts/probe_models.py                       # 探测内置候选表
+python scripts/probe_models.py --model qwen-max --model deepseek-r1
+```
+
+阿里百炼的免费额度是**按模型分别发放**的，某个模型跑出 `insufficient_quota` 时换一个通常即可继续。
+推理型模型（`deepseek-r1` 等）会把 token 先消耗在思维链上，需把 `--max-tokens` 提到 8192，否则容易只返回空内容。
+
+**分批跑**：`--offset N --limit M` 只跑第 N+1 ~ N+M 条，各批次共享同一份结果文件并按 id 去重，
+适合「先跑 10 条看效果再决定是否跑完」的场景（例如 `--offset 10 --limit 10`）。
+
+### 生成报告
+
+```bash
 # 3) 生成报告（直接读跑批 JSONL，无中间聚合步骤）
 python scripts/build_report_docx.py \
-    results/redteam_batch/dataset_sample100_qwen3-max_cot_p8_r3_batch_eval_results.jsonl \
-    --out reports/CoT越狱攻击安全评测报告-qwen3.docx
+    results/redteam_batch/dataset_sample100_qwen-max_cot_p8_r3_batch_eval_results.jsonl \
+    --out reports/CoT越狱攻击安全评测报告-qwen-max.docx --model qwen-max --max-rounds 3
 ```
 
 **口径提醒**（报告第 2 节有完整说明）：本工具链采用关键词拒答检测，

@@ -388,11 +388,18 @@ def run_batch(
     use_mock: bool,
     resume: bool = True,
     retry_errors: bool = False,
+    offset: int = 0,
 ):
     """批量评测：每处理完一条样本即 yield 一次，避免长时间黑屏无反馈。"""
     _CANCEL_EVENT.clear()
     dataset_path = Path(csv_file)
-    rows = DatasetLoader(dataset_path).load_records(limit=limit)
+    # 先整体加载再切片：load_records(limit=) 只会取头部，无法配合 offset 分批
+    all_rows = DatasetLoader(dataset_path).load_records()
+    # offset 用于「分批」评测：先跑前 10 条确认无误，再逐批推进；
+    # 结果文件仍按数据集整体命名，各批次共用同一份结果，靠 id 去重续跑。
+    rows = all_rows[offset:] if offset else all_rows
+    if limit is not None:
+        rows = rows[:limit]
     config = AgentConfig(
         model_name=model_name,
         base_url=_normalize_base_url(base_url),
