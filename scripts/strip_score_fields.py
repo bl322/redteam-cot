@@ -1,15 +1,15 @@
-"""剥离历史跑批结果中的裁判评分字段，只保留关键词判定与流程观测字段。
+"""剥离历史跑批结果中的派生评分字段，只保留关键词判定与流程观测字段。
 
 处理范围：results/redteam_batch/ 下的 *.jsonl（逐条结果）、*_summary.json、
 *_checkpoint.json。
 
-- 删除：harmfulness / max_harmfulness / attack_success / llm 等评分字段
+- 删除：结果里的派生评分字段与评分明细
 - 改写：final_status 若来自评分通道（deflection/partial/full/unclear），
         按关键词拒答结果回落为 refusal / answered
 
 用法：
-    python scripts/strip_judge_fields.py            # 默认处理 results/redteam_batch
-    python scripts/strip_judge_fields.py --dry-run  # 只看会改什么
+    python scripts/strip_score_fields.py            # 默认处理 results/redteam_batch
+    python scripts/strip_score_fields.py --dry-run  # 只看会改什么
 """
 from __future__ import annotations
 
@@ -18,8 +18,8 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
-JUDGE_FIELDS = ("harmfulness", "max_harmfulness", "attack_success", "llm", "llm_verdicts")
-JUDGE_STATUSES = {"deflection", "partial", "full", "unclear"}
+SCORE_FIELDS = ("harmfulness", "max_harmfulness", "attack_success", "llm", "llm_verdicts")
+SCORE_STATUSES = {"deflection", "partial", "full", "unclear"}
 SUMMARY_FIELDS = (
     "avg_harmfulness",
     "avg_max_harmfulness",
@@ -31,9 +31,9 @@ SUMMARY_FIELDS = (
 
 
 def _strip_record(record: Dict[str, Any]) -> Dict[str, Any]:
-    out = {k: v for k, v in record.items() if k not in JUDGE_FIELDS}
+    out = {k: v for k, v in record.items() if k not in SCORE_FIELDS}
     status = str(out.get("final_status", ""))
-    if status in JUDGE_STATUSES:
+    if status in SCORE_STATUSES:
         out["final_status"] = "refusal" if int(out.get("refusals", 0) or 0) > 0 else "answered"
     return out
 
@@ -80,7 +80,7 @@ def process(path: Path, dry_run: bool) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="剥离跑批结果中的裁判评分字段")
+    parser = argparse.ArgumentParser(description="剥离跑批结果中的派生评分字段")
     parser.add_argument("target", nargs="?", type=Path, default=None, help="目标目录，默认 results/redteam_batch")
     parser.add_argument("--dry-run", action="store_true", help="只统计不落盘")
     args = parser.parse_args()

@@ -106,7 +106,7 @@ flowchart TD
     结果逐条落盘、`Ctrl+C` 后重跑自动断点续跑；Key 通过 `LLM_API_KEY` 环境变量传入。
   - `build_report_docx.py`：直接读原始跑批 JSONL 生成 `.docx` 评测报告（含 4 张图表、
     一级/二级领域对比表、演化过程分析与局限说明）。所有叙事结论按数据自适应，不写死。
-  - `strip_judge_fields.py`：清理历史跑批结果中的评分字段，只保留关键词判定与流程观测字段。
+  - `strip_score_fields.py`：清理历史跑批结果中的派生评分字段，只保留关键词判定与流程观测字段。
   - `compare_runs.py`：对比两份批量结果的关键词口径指标（拒答率 / ASR / 轮次 / 领域）
   - `refusal_regress.py`：拒答检测离线回归测试（15 例，含引述 / 举例 / 假设等易误判句式）
 - `requirements.txt`：依赖列表
