@@ -1,6 +1,6 @@
 # 🧠 CoT Red-Team Agent (思维链越狱评测智能体)
 
-> 本项目从智能体（Agent）的全新视角出发，对前沿大模型越狱评测框架进行工程化落地。根据 2026 年 9 月 20 日会议决议，系统已由原 CC-BOS（文言文优化）攻击**升级替换为更新型的 CoT（思维链）攻击**，并保留 CC-BOS 作为对比基线，用于同条件下的消融对照实验。
+> 本项目从智能体（Agent）的全新视角出发，对前沿大模型越狱评测框架进行工程化落地。系统已由原 CC-BOS（文言文优化）攻击**升级替换为更新型的 CoT（思维链）攻击**，并保留 CC-BOS 作为对比基线，用于同条件下的消融对照实验。
 
 ## 🌟 简介
 
@@ -374,4 +374,4 @@ https://<你的实例>.<region>.maas.aliyuncs.com/compatible-mode/v1
 ## 参考文献
 
 1. Huang, X., Qin, S., Jia, X., et al. (2026). Obscure but effective: Classical Chinese jailbreak prompt optimization via bio-inspired search. In International Conference on Learning Representations. （CC-BOS 基线）
-2. 思维链 (Chain-of-Thought) 提示与推理链安全评测相关工作，详见 2026-09-20 会议纪要。
+2. 思维链 (Chain-of-Thought) 提示与推理链安全评测相关工作。
