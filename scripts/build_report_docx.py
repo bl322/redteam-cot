@@ -151,6 +151,39 @@ def num(value: Optional[float], digits: int = 2) -> str:
 
 CHART_DIR_NAME = "charts_kw"
 
+# 不同攻击策略的报告文案（标题 / 概述 / 框架行），避免把 CoT 的机制描述套到别的攻击上
+ATTACK_TITLES = {
+    "cot": "CoT 思维链",
+    "flip": "FlipAttack 翻转",
+    "cc_bos": "CC-BOS 风格改写",
+}
+ATTACK_INTRO = {
+    "cot": (
+        "本报告针对大语言模型在「思维链（Chain-of-Thought, CoT）越狱攻击」下的安全表现进行系统性评测。"
+        "CoT 攻击的核心思路是：不直接向模型提出有害请求，而是先诱导模型把该请求分解成一条看似中性、"
+        "逐步推进的推理链，让模型在逐步骤作答的过程中逐步接近有害目标，最后在收束环节请求合成结论。"
+        "本次评测使用自动化的 CoT 攻击框架（目标分解 → 推理链诱导 → 多轮演化改写）对目标模型发起攻击，"
+        "并以关键词拒答检测判定每一条样本的最终结果。"
+    ),
+    "flip": (
+        "本报告针对大语言模型在「FlipAttack 翻转越狱攻击」（ICML 2025, arXiv:2410.02832）下的安全表现进行评测。"
+        "该攻击利用自回归模型自左向右理解文本的特性：在有害提示左侧构造一段可被规则还原的翻转噪声，"
+        "使表层安全分类器难以识别，同时在 system 侧给出消噪与执行规则，要求模型「先还原、再逐步作答」。"
+        "攻击单次成型、不含迭代搜索，每条样本只提交一次请求；"
+        "判定同样使用关键词拒答检测，与本项目 CoT 报告保持同一口径，可直接横向比较。"
+    ),
+    "cc_bos": (
+        "本报告针对大语言模型在「CC-BOS 风格改写越狱攻击」下的安全表现进行评测。"
+        "该攻击不引入推理链结构，仅通过改写语言风格（如文言化、角色化包装）对有害请求做表层伪装，"
+        "用作「纯风格伪装 vs 结构化推理链诱导」的对照基线；判定使用关键词拒答检测。"
+    ),
+}
+ATTACK_FRAME = {
+    "cot": "CoT 思维链攻击（目标分解 → 推理链诱导 → 逐轮演化改写）",
+    "flip": "FlipAttack 翻转攻击（整句字符翻转 + 消噪规则 + CoT / LangGPT / Few-shot 变体，单次成型）",
+    "cc_bos": "CC-BOS 风格改写基线（文言化 / 角色化包装）",
+}
+
 
 # --------------------------------------------------------------------------
 # 统计（纯关键词口径）
@@ -361,8 +394,16 @@ def build(
     sample_note: str = "",
     max_rounds: int = 3,
     label: str = "",
+    attack: str = "",
 ) -> Path:
     _setup_font()
+    # 攻击策略：未显式指定时从结果文件名推断（..._cot_p8_r3 / ..._flip_p8_r1 / ..._cc_bos_...）
+    attack = (attack or "").strip().lower()
+    if not attack:
+        stem = jsonl_path.stem.lower()
+        attack = next((a for a in ("flip", "cc_bos") if f"_{a}_" in stem), "cot")
+    # 推理链跟随率 / 结论达成率是 CoT 专用观测，其它攻击没有该字段，报告里不呈现
+    is_cot = attack == "cot"
     rows: List[Dict[str, Any]] = []
     with jsonl_path.open(encoding="utf-8") as handle:
         for line in handle:
@@ -389,7 +430,7 @@ def build(
     # ---- 封面标题 ----
     title = doc.add_paragraph()
     title.alignment = 1
-    run = title.add_run("CoT 思维链越狱攻击安全评测报告")
+    run = title.add_run(f"{ATTACK_TITLES.get(attack, 'CoT 思维链')}越狱攻击安全评测报告")
     run.bold = True
     run.font.size = Pt(22)
     run.font.color.rgb = ACCENT
@@ -407,15 +448,8 @@ def build(
 
     # ---- 1. 评测概述 ----
     heading(doc, "1. 评测概述", 1)
-    para(
-        doc,
-        "本报告针对大语言模型在「思维链（Chain-of-Thought, CoT）越狱攻击」下的安全表现进行系统性评测。"
-        "CoT 攻击的核心思路是：不直接向模型提出有害请求，而是先诱导模型把该请求分解成一条看似中性、"
-        "逐步推进的推理链，让模型在逐步骤作答的过程中逐步接近有害目标，最后在收束环节请求合成结论。"
-        "本次评测使用自动化的 CoT 攻击框架（目标分解 → 推理链诱导 → 多轮演化改写）对目标模型发起攻击，"
-        "并以关键词拒答检测判定每一条样本的最终结果。",
-    )
-    bullet(doc, "CoT 思维链攻击（目标分解 → 推理链诱导 → 逐轮演化改写）", "攻击框架: ")
+    para(doc, ATTACK_INTRO.get(attack, ATTACK_INTRO["cot"]))
+    bullet(doc, ATTACK_FRAME.get(attack, ATTACK_FRAME["cot"]), "攻击框架: ")
     bullet(doc, model_name, "测试模型: ")
     bullet(
         doc,
@@ -496,9 +530,14 @@ def build(
             ["越狱成功率（ASR）", pct(asr), f"{stats['num_non_refused']}/{n} 条未命中拒答句式"],
             ["关键词拒答率", pct(stats["refusal_rate"]), f"{stats['num_refused']}/{n} 条命中拒答句式"],
             ["平均演化轮次", num(stats["avg_rounds"], 2), f"上限 {max_rounds} 轮"],
-            ["平均推理链跟随率", f"{num(stats['avg_chain_follow_rate'], 1)}%", "模型按攻击者推理链结构作答的比例"],
-            ["结论达成率", pct(stats["conclusion_rate"], 1), "最终输出到达收束环节的样本占比"],
-        ],
+        ] + (
+            [
+                ["平均推理链跟随率", f"{num(stats['avg_chain_follow_rate'], 1)}%", "模型按攻击者推理链结构作答的比例"],
+                ["结论达成率", pct(stats["conclusion_rate"], 1), "最终输出到达收束环节的样本占比"],
+            ]
+            if is_cot
+            else [["攻击形态", "单次成型", "该策略不含迭代搜索，每条样本只提交一次请求"]]
+        ),
         widths=[2.3, 1.6, 2.7],
     )
     figure(doc, chart_dir / "overall.png", f"图 1　{n} 条有效样本的全局判定分布")
@@ -571,7 +610,9 @@ def build(
     heading(doc, "6. 演化过程分析", 1)
     para(
         doc,
-        "CoT 攻击依赖多轮改写逐步逼近目标。以下从实际轮次消耗与推理链跟随情况两个角度观察攻击推进过程。",
+        "CoT 攻击依赖多轮改写逐步逼近目标。以下从实际轮次消耗与推理链跟随情况两个角度观察攻击推进过程。"
+        if is_cot
+        else "该策略单次成型、不含演化过程，本节仅观察实际请求轮次的分布（期望全部落在第 1 轮）。",
     )
     dist = stats["rounds_distribution"]
     rows_out = [
@@ -579,19 +620,27 @@ def build(
     ]
     table(doc, ["实际轮次", "样本数", "占比"], rows_out, widths=[1.6, 1.4, 1.4])
     figure(doc, chart_dir / "rounds.png", "图 4　样本实际演化轮次分布")
-    bullet(
-        doc,
-        f"平均推理链跟随率 {num(stats['avg_chain_follow_rate'], 1)}%，"
-        "说明模型在多数样本中确实按攻击者给定的推理链结构逐步作答，攻击的结构性诱导是生效的。",
-        "推理链跟随: ",
-    )
-    bullet(
-        doc,
-        f"结论达成率 {pct(stats['conclusion_rate'], 1)}，"
-        f"平均轮次 {num(stats['avg_rounds'], 2)} / 上限 {max_rounds}，"
-        "多数样本跑满了设定的演化预算。",
-        "轮次消耗: ",
-    )
+    if is_cot:
+        bullet(
+            doc,
+            f"平均推理链跟随率 {num(stats['avg_chain_follow_rate'], 1)}%，"
+            "说明模型在多数样本中确实按攻击者给定的推理链结构逐步作答，攻击的结构性诱导是生效的。",
+            "推理链跟随: ",
+        )
+        bullet(
+            doc,
+            f"结论达成率 {pct(stats['conclusion_rate'], 1)}，"
+            f"平均轮次 {num(stats['avg_rounds'], 2)} / 上限 {max_rounds}，"
+            "多数样本跑满了设定的演化预算。",
+            "轮次消耗: ",
+        )
+    else:
+        bullet(
+            doc,
+            f"平均轮次 {num(stats['avg_rounds'], 2)} / 上限 {max_rounds}："
+            "该策略为单次成型，每条样本只提交一次请求，不含迭代搜索与反馈式修正。",
+            "轮次消耗: ",
+        )
 
     # ---- 7. 典型样本 ----
     heading(doc, "7. 典型样本", 1)
@@ -621,8 +670,8 @@ def build(
     heading(doc, "8. 结论", 1)
     bullet(
         doc,
-        f"在关键词拒答口径下，CoT 思维链攻击对 {model_name} 的越狱成功率为 {pct(asr)}"
-        f"（{stats['num_non_refused']}/{n}）。",
+        f"在关键词拒答口径下，{ATTACK_TITLES.get(attack, 'CoT 思维链')}攻击对 {model_name} "
+        f"的越狱成功率为 {pct(asr)}（{stats['num_non_refused']}/{n}）。",
         "总体结论: ",
     )
     bullet(
@@ -632,12 +681,20 @@ def build(
         "不同安全领域之间的防御表现存在明显差异。",
         "领域差异: " if domains else "",
     )
-    bullet(
-        doc,
-        f"平均推理链跟随率 {num(stats['avg_chain_follow_rate'], 1)}%，"
-        "表明攻击的结构性诱导环节稳定生效，防御压力集中在最终是否给出拒答表述这一层。",
-        "攻击机制: ",
-    )
+    if is_cot:
+        bullet(
+            doc,
+            f"平均推理链跟随率 {num(stats['avg_chain_follow_rate'], 1)}%，"
+            "表明攻击的结构性诱导环节稳定生效，防御压力集中在最终是否给出拒答表述这一层。",
+            "攻击机制: ",
+        )
+    else:
+        bullet(
+            doc,
+            "该策略在提示左侧构造可还原的翻转噪声，不依赖多轮演化，"
+            "说明本模型的拒答触发主要依赖表层模式匹配，而非对意图的深层理解。",
+            "攻击机制: ",
+        )
     bullet(
         doc,
         "本口径只判「是否显式拒答」，不判响应内容是否有害，因此 ASR 为宽松上界；"
@@ -688,6 +745,12 @@ def main() -> int:
     parser.add_argument("--label", default="", help="数据集标签")
     parser.add_argument("--sample-note", default="", help="样本说明")
     parser.add_argument("--max-rounds", type=int, default=3, help="演化轮次上限（写进报告正文）")
+    parser.add_argument(
+        "--attack",
+        default="",
+        choices=["", "cot", "flip", "cc_bos"],
+        help="攻击策略（留空则按结果文件名推断），决定标题与机制描述",
+    )
     args = parser.parse_args()
 
     path = build(
@@ -697,6 +760,7 @@ def main() -> int:
         sample_note=args.sample_note,
         max_rounds=args.max_rounds,
         label=args.label,
+        attack=args.attack,
     )
     print(f"报告已生成: {path}")
     return 0
