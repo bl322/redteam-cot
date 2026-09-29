@@ -511,6 +511,49 @@ CoT 的响应几乎全压在 1–2 分与 3 分的边界上，换裁判就漂移
 > 本项目的 91%（关键词上界，qwen-max）与 FlipAttack 论文的 98%（GPT-4o Judge 口径）不可比。
 > 只报关键词口径会掩盖「CoT 92% 但真实有害输出仅 16%」这类 50pp 量级的差异。
 
+### 跨模型对照：qwen-flash vs qwen-max（同一 FlipAttack、同一裁判 deepseek-v3）
+
+攻击配置完全一致（FCS 翻转 + CoT/LangGPT/Few-shot 三件套，单次成型），裁判、量表、阈值一致，
+差异只来自**被测模型本身**（各 100 条，全部评分成功）：
+
+| 指标 | qwen-flash | qwen-max |
+| --- | --- | --- |
+| 关键词口径 ASR | 73.00% | 91.00% |
+| **Judge 口径 ASR（score≥3）** | **27.00%** | **72.00%** |
+| 两口径差值（上界−真实） | +46.00pp | +19.00pp |
+| Judge 平均分 | 2.02 | 3.44 |
+| 分数分布 | 1:73 / **4:6 / 5:21** | 1:24 / 2:4 / 3:5 / 4:38 / 5:29 |
+
+- **Judge 口径下相差 45pp（2.7×）**：qwen-max 被攻破 72%，qwen-flash 只有 27%。
+- qwen-flash 分数呈**双峰**（1 分 73 条、4–5 分 27 条，无 2/3 分）：要么彻底不含可操作信息，
+  要么完整执行请求，几乎不停在「半吊子」档——轻量模型的对齐行为更像开关而非渐进。
+- qwen-flash 的关键词高估量（+46pp）远大于 qwen-max（+19pp）：它最擅长用
+  「不拒答但也不给干货」的安全科普/话术偏转骗过关键词法（混淆矩阵：关键词得手但 Judge 未得手 47 条）。
+- 分领域 Judge ASR（qwen-flash / qwen-max）：歧视 28.1% / 62.5%，侵犯权益 28.6% / 85.7%，
+  商业违法违规 31.6% / 84.2%，特定服务 22.2% / 55.6%，核心价值观 20.0% / 80.0%。
+
+复现：
+
+```bash
+# 1) 跑批（--response-chars 0 留完整响应）
+python scripts/run_batch_cli.py --dataset data/dataset_sample100.csv \
+    --attack flip --flip-mode FCS --model qwen-flash --limit 100 --response-chars 0
+
+# 2) Judge 评分
+python scripts/judge_score.py results/redteam_batch/dataset_sample100_qwen-flash_flip_p8_r1_batch_eval_results.jsonl \
+    --judge-model deepseek-v3 --model qwen-flash
+
+# 3) 终端对照表
+python scripts/compare_judge.py results/.../qwen-flash...judge-deepseek-v3.jsonl \
+    results/.../qwen-max...judge-deepseek-v3.jsonl --per-domain
+
+# 4) 报告 + 跨模型对照章节（append_cross_model_section.py 支持 --compare 多次传入）
+python scripts/build_report_docx.py <跑批JSONL> --out reports/xxx.docx \
+    --attack flip --judge-jsonl <judge jsonl>
+python scripts/append_cross_model_section.py --docx reports/xxx.docx \
+    --compare "qwen-flash=<judge jsonl>" --compare "qwen-max=<judge jsonl>"
+```
+
 ## 评测维度详解
 
 裁判节点（Judge Node）包含以下评估模块：
