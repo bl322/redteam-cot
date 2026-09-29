@@ -200,7 +200,15 @@ def _load_judge_rows(paths: Optional[List[Path]]) -> List[Dict[str, Any]]:
                 line = line.strip()
                 if line:
                     rows.append(json.loads(line))
-        scored = [r for r in rows if r.get("judge_score") is not None]
+        # 跑批失败（额度/网络）的样本没有真实响应，裁判会对着空串打出 1 分。
+        # 这类记录必须剔除，否则会把 Judge ASR 系统性拉低、并与关键词口径的
+        # 「有效样本」分母不一致（关键词口径本来就只统计非 error 样本）。
+        skipped = sum(1 for r in rows if str(r.get("final_status")) == "error")
+        scored = [
+            r
+            for r in rows
+            if r.get("judge_score") is not None and str(r.get("final_status")) != "error"
+        ]
         if not scored:
             continue
         n_scored = len(scored)
@@ -223,6 +231,7 @@ def _load_judge_rows(paths: Optional[List[Path]]) -> List[Dict[str, Any]]:
             {
                 "judge_model": str(scored[0].get("judge_model") or "unknown"),
                 "num_scored": n_scored,
+                "num_skipped_error": skipped,
                 "judge_asr": (len(hits) / n_scored) if n_scored else None,
                 "keyword_asr": (len(kw_answered) / n_scored) if n_scored else None,
                 "avg_score": (sum(int(r["judge_score"]) for r in scored) / n_scored) if n_scored else None,
@@ -453,6 +462,7 @@ def build(
     label: str = "",
     attack: str = "",
     judge_jsonl: Optional[List[Path]] = None,
+    judge_note: str = "",
 ) -> Path:
     _setup_font()
     # 攻击策略：未显式指定时从结果文件名推断（..._cot_p8_r3 / ..._flip_p8_r1 / ..._cc_bos_...）
@@ -771,12 +781,15 @@ def build(
             f"score ≥ {JUDGE_THRESHOLD} 折算 Judge 口径 ASR，用来估计上界与真值之间的差距。"
             "裁判与被测模型不同族，避免自评偏好。",
         )
+        if judge_note:
+            para(doc, judge_note, bold=False, color=GREY)
         judge_table = []
         for item in judge_rows:
             judge_table.append(
                 [
                     item["judge_model"],
-                    str(item["num_scored"]),
+                    str(item["num_scored"])
+                    + (f"（剔除 {item['num_skipped_error']} 条失败）" if item.get("num_skipped_error") else ""),
                     pct(item["keyword_asr"], 1),
                     pct(item["judge_asr"], 1),
                     f"{(item['keyword_asr'] - item['judge_asr']) * 100:+.1f}pp"
@@ -889,6 +902,11 @@ def main() -> int:
         help="攻击策略（留空则按结果文件名推断），决定标题与机制描述",
     )
     parser.add_argument(
+        "--judge-note",
+        default="",
+        help="写入 Judge 复核小节的说明（如 Judge 分数出自另一次跑批、样本量不同的原因）",
+    )
+    parser.add_argument(
         "--judge-jsonl",
         nargs="*",
         type=Path,
@@ -906,6 +924,7 @@ def main() -> int:
         label=args.label,
         attack=args.attack,
         judge_jsonl=args.judge_jsonl,
+        judge_note=args.judge_note,
     )
     print(f"报告已生成: {path}")
     return 0

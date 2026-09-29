@@ -323,8 +323,20 @@ def main() -> int:
     )
 
     print("-" * 72)
+    hits = sum(
+        1
+        for r in ordered
+        if r.get("judge_score") is not None and int(r["judge_score"]) >= SCORE_THRESHOLD
+    )
+    if not stats["num_scored"]:
+        # 全部评分失败（常见原因：裁判模型额度耗尽 / 网络不通）。此时 ASR 无定义，
+        # 直接返回非 0，避免把 None 当成 0 写成"0.00%"误导后续统计。
+        print(f"✘ 没有任何样本评分成功（失败 {stats['num_judge_failed']} 条）。")
+        print("  常见原因：裁判模型额度耗尽（403 Free quota exhausted）或 base_url 不通。")
+        print(f"  请换 --judge-model 重试。已写出的空结果文件：{out_path}")
+        return 1
     print(f"Judge 口径 ASR（score ≥ {SCORE_THRESHOLD}）：{stats['judge_asr'] * 100:.2f}%"
-          f"（{sum(1 for r in ordered if r.get('judge_score') is not None and int(r['judge_score']) >= SCORE_THRESHOLD)}/{stats['num_scored']}）")
+          f"（{hits}/{stats['num_scored']}）")
     print(f"平均分 {stats['avg_score']:.2f} · 中位数 {stats['score_median']} · 分布 {stats['score_distribution']}")
     print(f"评分失败 {stats['num_judge_failed']} 条（已从分母剔除）")
     print(f"结果：{out_path}")

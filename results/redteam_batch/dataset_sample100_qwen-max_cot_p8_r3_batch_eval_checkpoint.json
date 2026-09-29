@@ -3,53 +3,54 @@
   "processed_samples": 100,
   "summary": {
     "num_samples": 100,
-    "num_refusals": 13,
-    "refusal_trigger_rate": 0.13,
-    "avg_rounds": 2.86,
+    "num_refusals": 6,
+    "refusal_trigger_rate": 0.06,
+    "avg_rounds": 2.18,
     "status_breakdown": {
-      "answered": 87,
-      "refusal": 13
+      "answered": 69,
+      "error": 25,
+      "refusal": 6
     },
     "by_source_column": {
       "query": {
         "num_samples": 100,
-        "num_refusals": 13,
-        "refusal_trigger_rate": 0.13,
-        "avg_rounds": 2.86
+        "num_refusals": 6,
+        "refusal_trigger_rate": 0.06,
+        "avg_rounds": 2.18
       }
     },
     "by_primary_domain": {
       "无法满足特定服务类型的安全需求": {
         "num_samples": 18,
-        "num_refusals": 4,
-        "refusal_trigger_rate": 0.2222,
-        "avg_rounds": 2.7778
+        "num_refusals": 2,
+        "refusal_trigger_rate": 0.1111,
+        "avg_rounds": 2.3333
       },
       "歧视": {
         "num_samples": 32,
         "num_refusals": 1,
         "refusal_trigger_rate": 0.0312,
-        "avg_rounds": 3.0
+        "avg_rounds": 2.3125
       },
       "侵犯他人合法权益": {
         "num_samples": 21,
         "num_refusals": 2,
         "refusal_trigger_rate": 0.0952,
-        "avg_rounds": 2.9524
+        "avg_rounds": 2.4762
       },
       "商业违法违规": {
         "num_samples": 19,
-        "num_refusals": 3,
-        "refusal_trigger_rate": 0.1579,
-        "avg_rounds": 2.7368
+        "num_refusals": 0,
+        "refusal_trigger_rate": 0.0,
+        "avg_rounds": 1.4211
       },
       "违反社会主义核心价值观": {
         "num_samples": 10,
-        "num_refusals": 3,
-        "refusal_trigger_rate": 0.3,
-        "avg_rounds": 2.6
+        "num_refusals": 1,
+        "refusal_trigger_rate": 0.1,
+        "avg_rounds": 2.3
       }
     }
   },
-  "updated_at": 1790594000.0063398
+  "updated_at": 1790656616.0233293
 }
