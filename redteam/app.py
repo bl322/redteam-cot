@@ -112,7 +112,12 @@ def _cancelled_html(elapsed: float) -> str:
     )[0]
 
 
-def _summarize(result: Dict[str, Any]) -> Dict[str, Any]:
+def _summarize(result: Dict[str, Any], response_chars: int = 200) -> Dict[str, Any]:
+    """汇总单条样本的判定结果。
+
+    ``response_chars`` 控制留存响应长度：默认 200 字符（够人工复核拒答与否），
+    做 Judge 口径评分时必须放宽（传 0 表示不截断），否则有害内容多半出现在 200 字之后。
+    """
     history = result.get("history", [])
     refusals = sum(1 for row in history if row.get("judge", {}).get("is_refusal_template"))
     rounds = len(history)
@@ -128,7 +133,13 @@ def _summarize(result: Dict[str, Any]) -> Dict[str, Any]:
         summary["chain_follow_rate"] = f"{followed / len(history) * 100:.0f}%"
         summary["conclusion_reached"] = bool(judges[-1].get("conclusion_reached"))
         # 留存末轮响应与拒答依据，便于人工复核「真拒答」还是「误判」
-        summary["last_response"] = (history[-1].get("response") or "")[:200]
+        full_response = history[-1].get("response") or ""
+        summary["last_response"] = (
+            full_response if response_chars <= 0 else full_response[:response_chars]
+        )
+        if response_chars <= 0:
+            # Judge 口径需要完整响应；同时保留一份长响应长度的元信息
+            summary["response_chars"] = len(full_response)
         evidence = judges[-1].get("refusal_evidence")
         if evidence:
             summary["refusal_evidence"] = str(evidence)[:200]
@@ -190,7 +201,7 @@ def _is_retryable_error(exc: Exception) -> bool:
 
 def _render_result(result: Dict[str, Any], config: AgentConfig, max_rounds: int) -> tuple:
     """把一次完整执行结果渲染为全部可视化组件。"""
-    summary = _summarize(result)
+    summary = _summarize(result, config.response_chars)
     history = result.get("history", [])
     df = pd.DataFrame(history)
 
@@ -235,6 +246,7 @@ def run_single(
     flip_cot: bool = True,
     flip_lang_gpt: bool = True,
     flip_few_shot: bool = True,
+    response_chars: int = 200,
 ):
     """流式执行单样本评测：每完成一个节点即产出一次进度，避免界面长时间无反馈。"""
     import time
@@ -255,6 +267,7 @@ def run_single(
             flip_cot=bool(flip_cot),
             flip_lang_gpt=bool(flip_lang_gpt),
             flip_few_shot=bool(flip_few_shot),
+            response_chars=int(response_chars),
         )
     except Exception as exc:  # 配置错误（如不支持的策略名）
         yield _error_outputs(f"{type(exc).__name__}: {exc}")
@@ -414,6 +427,7 @@ def run_batch(
     flip_cot: bool = True,
     flip_lang_gpt: bool = True,
     flip_few_shot: bool = True,
+    response_chars: int = 200,
 ):
     """批量评测：每处理完一条样本即 yield 一次，避免长时间黑屏无反馈。"""
     _CANCEL_EVENT.clear()
@@ -438,6 +452,7 @@ def run_batch(
         flip_cot=bool(flip_cot),
         flip_lang_gpt=bool(flip_lang_gpt),
         flip_few_shot=bool(flip_few_shot),
+        response_chars=int(response_chars),
     )
     max_rounds = config.max_rounds
     app = build_graph(config)
@@ -605,7 +620,7 @@ def run_batch(
                     time.sleep(delay)
                     delay = min(delay * 2, 30.0)
 
-            summary = _summarize(result) if result is not None else {
+            summary = _summarize(result, config.response_chars) if result is not None else {
                 "rounds": 0,
                 "refusals": 0,
                 "final_status": "error",

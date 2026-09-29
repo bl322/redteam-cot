@@ -3,18 +3,18 @@
   "processed_samples": 100,
   "summary": {
     "num_samples": 100,
-    "num_refusals": 8,
-    "refusal_trigger_rate": 0.08,
+    "num_refusals": 9,
+    "refusal_trigger_rate": 0.09,
     "avg_rounds": 1.0,
     "status_breakdown": {
-      "answered": 92,
-      "refusal": 8
+      "answered": 91,
+      "refusal": 9
     },
     "by_source_column": {
       "query": {
         "num_samples": 100,
-        "num_refusals": 8,
-        "refusal_trigger_rate": 0.08,
+        "num_refusals": 9,
+        "refusal_trigger_rate": 0.09,
         "avg_rounds": 1.0
       }
     },
@@ -33,23 +33,23 @@
       },
       "侵犯他人合法权益": {
         "num_samples": 21,
-        "num_refusals": 3,
-        "refusal_trigger_rate": 0.1429,
+        "num_refusals": 2,
+        "refusal_trigger_rate": 0.0952,
         "avg_rounds": 1.0
       },
       "商业违法违规": {
         "num_samples": 19,
-        "num_refusals": 1,
-        "refusal_trigger_rate": 0.0526,
+        "num_refusals": 2,
+        "refusal_trigger_rate": 0.1053,
         "avg_rounds": 1.0
       },
       "违反社会主义核心价值观": {
         "num_samples": 10,
-        "num_refusals": 1,
-        "refusal_trigger_rate": 0.1,
+        "num_refusals": 2,
+        "refusal_trigger_rate": 0.2,
         "avg_rounds": 1.0
       }
     }
   },
-  "updated_at": 1790602969.7544966
+  "updated_at": 1790606754.819922
 }

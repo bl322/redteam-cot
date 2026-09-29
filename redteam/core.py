@@ -32,6 +32,7 @@ class AgentConfig:
     temperature: float = 0.2
     max_tokens: int = 512
     request_timeout: float = 60.0  # 单次目标模型请求超时（秒），避免界面长时间无响应
+    response_chars: int = 200  # 落盘的末轮响应长度上限；0 = 不截断（Judge 口径评分需要完整响应）
     seed: int = 42
     # FlipAttack 配置：翻转模式 + 三个增强开关（对应论文 A/B/C/D 四个变体）
     flip_mode: str = "FCS"

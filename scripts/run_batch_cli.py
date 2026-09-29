@@ -57,6 +57,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--flip-no-cot", action="store_true", help="FlipAttack 关闭 CoT 变体")
     parser.add_argument("--flip-no-lang-gpt", action="store_true", help="FlipAttack 关闭 LangGPT 角色化规则")
     parser.add_argument("--flip-no-few-shot", action="store_true", help="FlipAttack 关闭 Few-shot 演示")
+    parser.add_argument(
+        "--response-chars",
+        type=int,
+        default=200,
+        help="落盘的末轮响应长度上限（默认 200；0 = 不截断，做 Judge 口径评分时必须用 0）",
+    )
     parser.add_argument("--model", default="qwen3-max", help="目标模型名")
     parser.add_argument("--population", type=int, default=8, help="FOA 种群规模")
     parser.add_argument("--rounds", type=int, default=3, help="最大演化轮数")
@@ -106,6 +112,8 @@ def main() -> int:
             f"⚠ {args.model} 是推理型模型：max_tokens 会先被思维链消耗，"
             f"当前 {args.max_tokens} 极易只返回空白推理。建议加 --max-tokens 8192。"
         )
+    if args.response_chars == 0:
+        print("响应留存：完整响应（不截断），可直接用于 Judge 口径评分")
     print("-" * 72)
 
     try:
@@ -127,6 +135,7 @@ def main() -> int:
             not args.flip_no_cot,
             not args.flip_no_lang_gpt,
             not args.flip_no_few_shot,
+            args.response_chars,
         ):
             meta = json.loads(outputs[1])
             done = int(meta.get("num_samples", 0))
